@@ -30,7 +30,9 @@ class VirtualLabMeeting:
         model: str = "claude-sonnet-4-20250514",
         provider: str = "anthropic",
         max_team_size: int = 3,
-        verbose: bool = False
+        verbose: bool = False,
+        data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
+        input_dir: Optional[str] = None
     ):
         """Initialize a Virtual Lab meeting.
 
@@ -41,12 +43,16 @@ class VirtualLabMeeting:
             provider: 'anthropic' or 'openrouter'
             max_team_size: Maximum number of specialist agents (default: 3)
             verbose: Print detailed meeting transcript
+            data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
+            input_dir: Path to question-specific input data (defaults to data_dir)
         """
         self.user_question = user_question
         self.verbose = verbose
         self.api_key = api_key
         self.model = model
         self.provider = provider
+        self.data_dir = data_dir
+        self.input_dir = input_dir if input_dir is not None else data_dir
 
         # Initialize the PI first
         if self.verbose:
@@ -58,7 +64,9 @@ class VirtualLabMeeting:
             persona=create_pi_persona(),
             api_key=api_key,
             model=model,
-            provider=provider
+            provider=provider,
+            data_dir=data_dir,
+            input_dir=self.input_dir
         )
 
         # PI designs the research team
@@ -82,7 +90,9 @@ class VirtualLabMeeting:
                 persona=AgentPersona(**spec),
                 api_key=api_key,
                 model=model,
-                provider=provider
+                provider=provider,
+                data_dir=data_dir,
+                input_dir=self.input_dir
             )
             for spec in team_specs
         ]
@@ -92,7 +102,9 @@ class VirtualLabMeeting:
             persona=create_critic_persona(),
             api_key=api_key,
             model=model,
-            provider=provider
+            provider=provider,
+            data_dir=data_dir,
+            input_dir=self.input_dir
         )
 
         self.meeting_transcript = []
@@ -294,7 +306,9 @@ def run_virtual_lab(
     provider: Optional[str] = None,
     num_rounds: int = 2,
     max_team_size: int = 3,
-    verbose: bool = False
+    verbose: bool = False,
+    data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
+    input_dir: Optional[str] = None
 ) -> str:
     """Convenience function to run a Virtual Lab meeting.
 
@@ -306,6 +320,8 @@ def run_virtual_lab(
         num_rounds: Number of discussion rounds (default: 2)
         max_team_size: Maximum number of specialists (default: 3)
         verbose: Print detailed transcript
+        data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
+        input_dir: Path to question-specific input data (defaults to data_dir)
 
     Returns:
         Final synthesized answer
@@ -327,7 +343,9 @@ def run_virtual_lab(
         model=model,
         provider=provider,
         max_team_size=max_team_size,
-        verbose=verbose
+        verbose=verbose,
+        data_dir=data_dir,
+        input_dir=input_dir
     )
 
     final_answer = meeting.run_meeting(num_rounds=num_rounds)

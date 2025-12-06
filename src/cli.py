@@ -36,6 +36,9 @@ Examples:
   # Use a different model
   python -m src.cli --question "..." --model "openai/gpt-4"
 
+  # Use custom directories for databases and input data
+  python -m src.cli --question "..." --data-dir "/path/to/databases" --input-dir "/path/to/Q5"
+
   # Verbose output to see tool calls
   python -m src.cli --question "..." --verbose
         """,
@@ -97,8 +100,25 @@ Examples:
         type=str,
         help="API key (Anthropic or OpenRouter, or set env var)",
     )
+    parser.add_argument(
+        "--data-dir",
+        "-d",
+        type=str,
+        default="/home.galaxy4/sumin/project/aisci/Competition_Data",
+        help="Path to main database directory (Drug databases, PPI, GWAS, etc.)",
+    )
+    parser.add_argument(
+        "--input-dir",
+        type=str,
+        default=None,
+        help="Path to question-specific input data (e.g., gene signatures, expression data). If not specified, uses --data-dir",
+    )
 
     args = parser.parse_args()
+
+    # Set default input directory if not specified
+    if args.input_dir is None:
+        args.input_dir = args.data_dir
 
     # Check for conflicting modes
     if args.virtual_lab and args.with_critic:
@@ -117,7 +137,13 @@ Examples:
     # Only create agent for non-virtual-lab modes
     if not args.virtual_lab:
         try:
-            agent = create_agent(api_key=args.api_key, model=args.model, provider=provider)
+            agent = create_agent(
+                api_key=args.api_key,
+                model=args.model,
+                provider=provider,
+                data_dir=args.data_dir,
+                input_dir=args.input_dir
+            )
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
             sys.exit(1)
@@ -140,7 +166,9 @@ Examples:
                 provider=provider,
                 num_rounds=args.rounds,
                 max_team_size=args.team_size,
-                verbose=args.verbose
+                verbose=args.verbose,
+                data_dir=args.data_dir,
+                input_dir=args.input_dir
             )
 
             print("\n" + "=" * 60)
@@ -204,7 +232,9 @@ Examples:
                     provider=provider,
                     num_rounds=args.rounds,
                     max_team_size=args.team_size,
-                    verbose=args.verbose
+                    verbose=args.verbose,
+                    data_dir=args.data_dir,
+                    input_dir=args.input_dir
                 )
 
                 print("\n" + "=" * 60)

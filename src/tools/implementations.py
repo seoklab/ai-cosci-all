@@ -145,7 +145,7 @@ def search_pubmed(query: str, max_results: int = 10, retmax: int = 100) -> ToolR
         search_params = {
             "db": "pubmed",
             "term": query,
-            "rettype": "json",
+            "retmode": "json",
             "retmax": retmax,
         }
 
@@ -158,27 +158,33 @@ def search_pubmed(query: str, max_results: int = 10, retmax: int = 100) -> ToolR
         if not pmids:
             return ToolResult(True, [])
 
-        # Fetch article details
+        # Fetch article details using esummary (which properly supports JSON)
+        summary_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
         fetch_params = {
             "db": "pubmed",
             "id": ",".join(pmids),
-            "rettype": "abstract",
             "retmode": "json",
         }
 
-        fetch_response = requests.get(fetch_url, params=fetch_params, timeout=10)
+        fetch_response = requests.get(summary_url, params=fetch_params, timeout=10)
         fetch_response.raise_for_status()
         fetch_data = fetch_response.json()
 
         articles = []
-        for article in fetch_data.get("result", {}).get("uids", []):
-            if article != "uids":
-                doc = fetch_data["result"][article]
+        for pmid in pmids:
+            if pmid in fetch_data.get("result", {}):
+                doc = fetch_data["result"][pmid]
+                # Extract authors
+                authors = []
+                if "authors" in doc:
+                    authors = [author.get("name", "") for author in doc["authors"][:3]]
+
                 articles.append({
-                    "pmid": article,
+                    "pmid": pmid,
                     "title": doc.get("title", "N/A"),
-                    "abstract": doc.get("abstract", "N/A"),
-                    "authors": doc.get("authors", [])[:3],  # First 3 authors
+                    "abstract": doc.get("abstract", "N/A"),  # Note: esummary may not always include full abstract
+                    "authors": authors,
+                    "pubdate": doc.get("pubdate", "N/A"),
                 })
 
         return ToolResult(True, articles)
@@ -336,7 +342,16 @@ def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/
         elif db_name_lower == "string" or db_name_lower == "stringdb":
             string_path = data_path / "PPI" / "StringDB"
             if not string_path.exists():
-                return ToolResult(False, None, f"STRING directory not found at {string_path}")
+                # Try alternative paths
+                alt_path = data_path / "StringDB"
+                if alt_path.exists():
+                    string_path = alt_path
+                else:
+                    return ToolResult(False, None,
+                        f"STRING directory not found. Searched:\n"
+                        f"  - {string_path}\n"
+                        f"  - {alt_path}\n"
+                        f"Expected structure: {{data_dir}}/PPI/StringDB/")
 
             if query.lower() == "info":
                 files = [f.name for f in string_path.glob("*.txt")]
@@ -375,22 +390,23 @@ def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/
         return ToolResult(False, None, f"Database query error: {str(e)}")
 
 
-def read_file(file_path: str) -> ToolResult:
-    """Read a file from the data directory.
+def read_file(file_path: str, input_dir: str = "./data") -> ToolResult:
+    """Read a file from the input data directory.
 
     Args:
-        file_path: Path to file (relative to data directory)
+        file_path: Path to file (relative to input directory)
+        input_dir: Base directory for question-specific input data
 
     Returns:
         ToolResult with file contents
     """
     try:
-        data_dir = Path("./data")
+        data_dir = Path(input_dir)
         target_path = (data_dir / file_path).resolve()
 
         # Security check: ensure we're reading within data directory
         if not str(target_path).startswith(str(data_dir.resolve())):
-            return ToolResult(False, None, "Access denied: path outside data directory")
+            return ToolResult(False, None, "Access denied: path outside input directory")
 
         if not target_path.exists():
             return ToolResult(False, None, f"File not found: {file_path}")
@@ -501,13 +517,13 @@ def get_tool_definitions() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "read_file",
-                "description": "Read a file from the data directory. Supports parquet, CSV, TSV, and text files.",
+                "description": "Read a file from the input data directory (question-specific data like gene signatures, expression data). Supports parquet, CSV, TSV, and text files.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "file_path": {
                             "type": "string",
-                            "description": "Path to file relative to data directory",
+                            "description": "Path to file relative to input directory (e.g., 'Q5/exhaustion_signature.csv')",
                         }
                     },
                     "required": ["file_path"],

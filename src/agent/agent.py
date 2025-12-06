@@ -27,18 +27,22 @@ class AgentPersona:
 class BioinformaticsAgent:
     """Agent for answering complex bioinformatics questions."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-20250514", provider: str = "anthropic"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-20250514", provider: str = "anthropic", data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data", input_dir: Optional[str] = None):
         """Initialize the agent.
 
         Args:
             api_key: API key (Anthropic or OpenRouter)
             model: Model to use
             provider: 'anthropic' or 'openrouter'
+            data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
+            input_dir: Path to question-specific input data (defaults to data_dir)
         """
         if provider == "anthropic":
             self.client = AnthropicClient(api_key=api_key, model=model)
         else:
             self.client = OpenRouterClient(api_key=api_key, model=model)
+        self.data_dir = data_dir
+        self.input_dir = input_dir if input_dir is not None else data_dir
         self.tools = {
             "execute_python": execute_python,
             "search_pubmed": search_pubmed,
@@ -128,6 +132,12 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
 
         try:
             tool_func = self.tools[tool_name]
+            # Add data_dir to query_database calls
+            if tool_name == "query_database":
+                tool_input["data_dir"] = self.data_dir
+            # Add input_dir to read_file calls
+            elif tool_name == "read_file":
+                tool_input["input_dir"] = self.input_dir
             result = tool_func(**tool_input)
             return result.to_dict()
         except TypeError as e:
@@ -439,13 +449,15 @@ Please provide an improved answer that addresses the critique's suggestions. Foc
         return initial_answer, critique, final_answer
 
 
-def create_agent(api_key: Optional[str] = None, model: Optional[str] = None, provider: Optional[str] = None) -> BioinformaticsAgent:
+def create_agent(api_key: Optional[str] = None, model: Optional[str] = None, provider: Optional[str] = None, data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data", input_dir: Optional[str] = None) -> BioinformaticsAgent:
     """Factory function to create an agent.
 
     Args:
         api_key: API key (Anthropic or OpenRouter)
         model: Model identifier (defaults based on provider)
         provider: 'anthropic' or 'openrouter' (defaults to API_PROVIDER env var)
+        data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
+        input_dir: Path to question-specific input data (defaults to data_dir)
 
     Returns:
         BioinformaticsAgent instance
@@ -461,7 +473,7 @@ def create_agent(api_key: Optional[str] = None, model: Optional[str] = None, pro
         else:
             model = "anthropic/claude-sonnet-4"
 
-    return BioinformaticsAgent(api_key=api_key, model=model, provider=provider)
+    return BioinformaticsAgent(api_key=api_key, model=model, provider=provider, data_dir=data_dir, input_dir=input_dir)
 
 
 class ScientificAgent(BioinformaticsAgent):
@@ -477,7 +489,9 @@ class ScientificAgent(BioinformaticsAgent):
         persona: AgentPersona,
         api_key: Optional[str] = None,
         model: str = "claude-sonnet-4-20250514",
-        provider: str = "anthropic"
+        provider: str = "anthropic",
+        data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
+        input_dir: Optional[str] = None
     ):
         """Initialize a scientific agent with a specific persona.
 
@@ -486,8 +500,10 @@ class ScientificAgent(BioinformaticsAgent):
             api_key: API key (Anthropic or OpenRouter)
             model: Model to use
             provider: 'anthropic' or 'openrouter'
+            data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
+            input_dir: Path to question-specific input data (defaults to data_dir)
         """
-        super().__init__(api_key, model, provider)
+        super().__init__(api_key, model, provider, data_dir, input_dir)
         self.persona = persona
 
     def get_system_prompt(self) -> str:
