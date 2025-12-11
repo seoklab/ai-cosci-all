@@ -9,10 +9,27 @@ from src.agent.anthropic_client import AnthropicClient
 from src.tools.implementations import (
     execute_python,
     search_pubmed,
+    search_literature,
     query_database,
     read_file,
     get_tool_definitions,
 )
+
+
+def get_max_tokens_for_model(model_name: str) -> int:
+    """Determine appropriate max_tokens based on model name.
+
+    Free models on OpenRouter have limited credits, so we use fewer tokens.
+
+    Args:
+        model_name: The model identifier (e.g., "openai/gpt-oss-120b:free")
+
+    Returns:
+        Maximum tokens to request (500 for free models, 4096 for paid)
+    """
+    if ":free" in model_name.lower():
+        return 500  # Conservative limit for free tier
+    return 4096  # Higher limit for paid models to avoid truncation
 
 
 @dataclass
@@ -46,6 +63,7 @@ class BioinformaticsAgent:
         self.tools = {
             "execute_python": execute_python,
             "search_pubmed": search_pubmed,
+            "search_literature": search_literature,
             "query_database": query_database,
             "read_file": read_file,
         }
@@ -84,8 +102,11 @@ class BioinformaticsAgent:
    - Consider alternative explanations
 
 4. **Literature Integration**:
-   - Search PubMed for relevant studies
-   - Cite specific papers with PMIDs
+   - Use `search_literature` for deep, evidence-based answers from full-text papers (recommended for complex mechanistic questions)
+   - Use `search_pubmed` for quick abstract-level searches
+   - ALWAYS cite papers in this format: "Title" (PMID: 12345678)
+   - Include the full paper title and PMID for every claim backed by literature
+   - Example: "According to 'CRISPR-Cas9 genome editing in human cells' (PMID: 23287718), ..."
    - Note consensus vs. contrasting findings
    - Acknowledge knowledge gaps where relevant
 
@@ -194,7 +215,7 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
                 "messages": self.conversation_history,
                 "tools": get_tool_definitions(),
                 "temperature": 0.7,
-                "max_tokens": 1500,  # Reduced to avoid per-request limits
+                "max_tokens": get_max_tokens_for_model(self.client.model),
             }
 
             # Add system prompt for Anthropic
@@ -205,13 +226,25 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
 
             text, tool_calls = self.process_response(response)
 
+            # Check if response was truncated (hit token limit)
+            finish_reason = None
+            if response.get("choices") and len(response["choices"]) > 0:
+                finish_reason = response["choices"][0].get("finish_reason")
+
             if text:
                 if verbose:
                     print(f"Assistant: {text[:200]}..." if len(text) > 200 else f"Assistant: {text}")
+                    if finish_reason:
+                        print(f"[Finish reason: {finish_reason}]")
 
             # If no tool calls, we're done
             if not tool_calls:
-                if verbose:
+                # Warn if response was truncated due to length
+                if finish_reason == "length":
+                    if verbose:
+                        print("\n[WARNING: Response was truncated due to max_tokens limit]")
+                        print("[Agent completed - no more tools needed]")
+                elif verbose:
                     print("\n[Agent completed - no more tools needed]")
                 # Add the final assistant message
                 if text:
@@ -307,6 +340,7 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
 
 4. **Literature Support**:
    - Are claims consistent with the literature?
+   - Are ALL papers cited with BOTH title and PMID in format: "Title" (PMID: 12345678)?
    - Should additional papers be cited?
    - Are there contradictory findings that should be discussed?
 
@@ -392,7 +426,7 @@ If the answer is high quality and scientifically sound, you may approve it."""
             "messages": critic_messages,
             "tools": [],  # Critic doesn't use tools
             "temperature": 0.3,  # Lower temperature for consistent evaluation
-            "max_tokens": 1500,
+            "max_tokens": get_max_tokens_for_model(self.client.model),
         }
 
         if isinstance(self.client, AnthropicClient):

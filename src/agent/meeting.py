@@ -169,10 +169,11 @@ Meeting Context (recent discussion):
 {context}
 
 Contribute your specialized analysis. You may:
-- Use tools (execute_python, search_pubmed, query_database) as needed
+- Use tools (execute_python, search_pubmed, query_database, search_literature, read_file) as needed
 - Build on others' findings
 - Propose specific analyses or experiments
 - Point out issues you see
+- **CITE SOURCES**: When using tools or literature, cite the source (PMID for papers, filename for data, database name for queries)
 
 Be concise (3-5 sentences or a specific analysis). Focus on YOUR expertise."""
 
@@ -254,8 +255,13 @@ Full Meeting Transcript:
 Provide a comprehensive final answer that:
 1. Directly answers the research question
 2. Integrates insights from all specialists
-3. Acknowledges limitations and uncertainties
-4. Proposes next steps if appropriate
+3. **PRESERVE ALL CITATIONS**: Include every citation, PMID, data source, and file reference mentioned by specialists
+4. Acknowledges limitations and uncertainties
+5. Proposes next steps if appropriate
+
+**CRITICAL**: When specialists cite papers with "Title" (PMID: XXXXX) or reference data files, 
+databases, or analyses, YOU MUST include these citations in your synthesis. Do not summarize 
+away the source attribution.
 
 Structure your answer clearly with sections if needed."""
 
@@ -266,7 +272,10 @@ Structure your answer clearly with sections if needed."""
             "content": final_answer
         })
 
-        return final_answer
+        # Extract and append references section
+        final_answer_with_refs = self._append_references_section(final_answer)
+
+        return final_answer_with_refs
 
     def _format_team_list(self) -> str:
         """Format the team member list for prompts."""
@@ -297,6 +306,64 @@ Structure your answer clearly with sections if needed."""
             List of transcript entries with speaker, role, and content
         """
         return self.meeting_transcript
+
+    def _append_references_section(self, final_answer: str) -> str:
+        """Extract and append a references section to the final answer.
+        
+        Scans the meeting transcript for:
+        - PMIDs cited in format (PMID: XXXXX)
+        - Database queries and file references
+        - Data sources mentioned by specialists
+        
+        Args:
+            final_answer: The PI's synthesized answer
+            
+        Returns:
+            Final answer with appended references section
+        """
+        import re
+        
+        # Collect all citations and data sources from transcript
+        pmids = set()
+        data_sources = set()
+        
+        for entry in self.meeting_transcript:
+            content = entry['content']
+            
+            # Extract PMIDs
+            pmid_matches = re.findall(r'PMID:\s*(\d+)', content, re.IGNORECASE)
+            pmids.update(pmid_matches)
+            
+            # Extract file references
+            file_matches = re.findall(r'([A-Za-z0-9_\-]+\.(?:csv|txt|bam|pod5|pdf))', content)
+            data_sources.update(file_matches)
+            
+            # Extract database mentions
+            db_keywords = ['DrugBank', 'BindingDB', 'PubMed', 'PPI database', 'GWAS', 'StringDB', 'UniProt']
+            for keyword in db_keywords:
+                if keyword.lower() in content.lower():
+                    data_sources.add(keyword)
+        
+        # Build references section
+        references_parts = []
+        
+        if pmids:
+            references_parts.append("\n## References\n")
+            references_parts.append("**Literature Cited:**")
+            for pmid in sorted(pmids):
+                references_parts.append(f"- PMID: {pmid} (https://pubmed.ncbi.nlm.nih.gov/{pmid}/)")
+        
+        if data_sources:
+            if not pmids:
+                references_parts.append("\n## References\n")
+            references_parts.append("\n**Data Sources:**")
+            for source in sorted(data_sources):
+                references_parts.append(f"- {source}")
+        
+        if references_parts:
+            return final_answer + "\n" + "\n".join(references_parts)
+        else:
+            return final_answer
 
 
 def run_virtual_lab(

@@ -7,3 +7,4 @@ pytest==7.4.3
 ipython==8.16.0
 ipykernel==6.26.0
 jupyter==1.0.0
+paper-qa>=5.0.0

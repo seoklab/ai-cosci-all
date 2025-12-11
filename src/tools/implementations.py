@@ -193,6 +193,44 @@ def search_pubmed(query: str, max_results: int = 10, retmax: int = 100) -> ToolR
         return ToolResult(False, None, f"PubMed search error: {str(e)}")
 
 
+def _chunked_search(file_path: str, sep: str, column: str, search_value: str, limit: int = 10, chunk_size: int = 10000, max_chunks: int = 50) -> tuple[list, int]:
+    """Search a large file in chunks until enough results are found.
+
+    Args:
+        file_path: Path to the file
+        sep: Delimiter
+        column: Column to search in
+        search_value: Value to search for
+        limit: Maximum results to return
+        chunk_size: Rows per chunk
+        max_chunks: Maximum chunks to search (safety limit)
+
+    Returns:
+        Tuple of (results_list, total_rows_searched)
+    """
+    import pandas as pd
+
+    results = []
+    total_searched = 0
+
+    for chunk in pd.read_csv(file_path, sep=sep, chunksize=chunk_size, low_memory=False):
+        total_searched += len(chunk)
+
+        # Search this chunk
+        matches = chunk[chunk[column].astype(str).str.contains(search_value, case=False, na=False)]
+        results.extend(matches.to_dict('records'))
+
+        # Stop if we have enough results
+        if len(results) >= limit:
+            return results[:limit], total_searched
+
+        # Safety limit
+        if total_searched >= chunk_size * max_chunks:
+            break
+
+    return results, total_searched
+
+
 def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data") -> ToolResult:
     """Query a local database file.
 
@@ -202,11 +240,11 @@ def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/
                - Column name to search (e.g., 'Target Name:EGFR')
                - 'info' to get database info (shape, columns, sample)
                - 'all' to get first N rows
-        limit: Maximum rows to return (default: 100)
+        limit: Maximum rows to return (default: 10)
         data_dir: Path to database files
 
     Returns:
-        ToolResult with query results
+        ToolResult with query results. For searches, includes 'rows_searched' to show coverage.
     """
     try:
         import pandas as pd
@@ -222,7 +260,7 @@ def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/
 
             # For large files, read with chunksize or nrows
             if query.lower() == "info":
-                df_sample = pd.read_csv(file_path, sep="\t", nrows=5)
+                df_sample = pd.read_csv(file_path, sep="\t", nrows=5, low_memory=False)
                 return ToolResult(True, {
                     "database": "BindingDB",
                     "file": str(file_path),
@@ -232,14 +270,16 @@ def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/
             elif ":" in query:
                 # Column-based search: "Target Name:EGFR"
                 col, value = query.split(":", 1)
-                df = pd.read_csv(file_path, sep="\t", nrows=10000)  # Read subset for performance
-                filtered = df[df[col].astype(str).str.contains(value, case=False, na=False)].head(limit)
+                # Use chunked search to iteratively search through file
+                results, rows_searched = _chunked_search(file_path, "\t", col, value, limit=limit)
                 return ToolResult(True, {
-                    "count": len(filtered),
-                    "results": filtered.to_dict('records')
+                    "count": len(results),
+                    "rows_searched": rows_searched,
+                    "results": results,
+                    "message": f"Searched {rows_searched:,} rows, found {len(results)} matches"
                 })
             else:
-                df = pd.read_csv(file_path, sep="\t", nrows=limit)
+                df = pd.read_csv(file_path, sep="\t", nrows=limit, low_memory=False)
                 return ToolResult(True, df.to_dict('records'))
 
         elif db_name_lower == "drugbank":
@@ -296,7 +336,7 @@ def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/
                 file_path = pharos_path / f"{file_name}.csv"
                 if not file_path.exists():
                     return ToolResult(False, None, f"File {file_name}.csv not found")
-                df = pd.read_csv(file_path, nrows=limit)
+                df = pd.read_csv(file_path, nrows=limit, low_memory=False)
                 return ToolResult(True, {
                     "file": file_name,
                     "shape": df.shape,
@@ -306,7 +346,7 @@ def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/
             else:
                 # Default to drugs file
                 file_path = pharos_path / "pharos_drugs.csv"
-                df = pd.read_csv(file_path, nrows=limit)
+                df = pd.read_csv(file_path, nrows=limit, low_memory=False)
                 return ToolResult(True, {
                     "file": "pharos_drugs",
                     "columns": df.columns.tolist(),
@@ -319,7 +359,7 @@ def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/
                 return ToolResult(False, None, f"GWAS file not found at {file_path}")
 
             if query.lower() == "info":
-                df_sample = pd.read_csv(file_path, sep="\t", nrows=5)
+                df_sample = pd.read_csv(file_path, sep="\t", nrows=5, low_memory=False)
                 return ToolResult(True, {
                     "database": "GWAS",
                     "file": str(file_path),
@@ -327,16 +367,17 @@ def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/
                     "sample": df_sample.to_dict('records')
                 })
             elif ":" in query:
-                # Column-based search
+                # Column-based search with chunked iteration
                 col, value = query.split(":", 1)
-                df = pd.read_csv(file_path, sep="\t", nrows=50000)  # Read subset
-                filtered = df[df[col].astype(str).str.contains(value, case=False, na=False)].head(limit)
+                results, rows_searched = _chunked_search(file_path, "\t", col, value, limit=limit)
                 return ToolResult(True, {
-                    "count": len(filtered),
-                    "results": filtered.to_dict('records')
+                    "count": len(results),
+                    "rows_searched": rows_searched,
+                    "results": results,
+                    "message": f"Searched {rows_searched:,} rows, found {len(results)} matches"
                 })
             else:
-                df = pd.read_csv(file_path, sep="\t", nrows=limit)
+                df = pd.read_csv(file_path, sep="\t", nrows=limit, low_memory=False)
                 return ToolResult(True, df.to_dict('records'))
 
         elif db_name_lower == "string" or db_name_lower == "stringdb":
@@ -367,7 +408,7 @@ def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/
                     return ToolResult(False, None, f"File {file_name}.txt not found")
                 # STRING files use space delimiter for interactions, tab for others
                 sep = " " if "links" in file_name else "\t"
-                df = pd.read_csv(file_path, sep=sep, nrows=limit)
+                df = pd.read_csv(file_path, sep=sep, nrows=limit, low_memory=False)
                 return ToolResult(True, {
                     "file": file_name,
                     "shape": df.shape,
@@ -377,7 +418,7 @@ def query_database(db_name: str, query: str, limit: int = 10, data_dir: str = "/
             else:
                 # Default to protein info
                 file_path = string_path / "sapiens.9606.protein.info.v12.0.txt"
-                df = pd.read_csv(file_path, sep="\t", nrows=limit)
+                df = pd.read_csv(file_path, sep="\t", nrows=limit, low_memory=False)
                 return ToolResult(True, {
                     "file": "protein.info",
                     "columns": df.columns.tolist(),
@@ -424,7 +465,7 @@ def read_file(file_path: str, input_dir: str = "./data") -> ToolResult:
         elif target_path.suffix in [".csv", ".tsv"]:
             import pandas as pd
             sep = "\t" if target_path.suffix == ".tsv" else ","
-            df = pd.read_csv(target_path, sep=sep)
+            df = pd.read_csv(target_path, sep=sep, low_memory=False)
             return ToolResult(True, {
                 "shape": df.shape,
                 "columns": df.columns.tolist(),
@@ -439,6 +480,356 @@ def read_file(file_path: str, input_dir: str = "./data") -> ToolResult:
 
     except Exception as e:
         return ToolResult(False, None, f"File read error: {str(e)}")
+
+
+def search_literature(
+    question: str,
+    mode: str = "auto",
+    paper_dir: Optional[str] = None,
+    max_sources: int = 5
+) -> ToolResult:
+    """Advanced literature search using PaperQA with local PDFs and/or internet search.
+
+    This tool provides deep literature analysis by:
+    - Searching local PDF library (if available)
+    - Searching online databases (PubMed, arXiv) for new papers
+    - Reading full-text papers (not just abstracts)
+    - Generating cited, evidence-based answers
+
+    Args:
+        question: Research question to answer (natural language)
+        mode: Search mode - 'local' (only PDFs), 'online' (only internet), 'auto' (both)
+        paper_dir: Directory containing local PDF papers (uses config default if None)
+        max_sources: Maximum number of source contexts to retrieve (default: 5)
+
+    Returns:
+        ToolResult with:
+        - answer: Evidence-based answer with citations
+        - contexts: List of relevant text passages from papers
+        - references: Bibliography of cited papers
+        - sources_used: Information about which sources were queried
+
+    Note: More rigorous than search_pubmed as it reads full papers and synthesizes answers.
+    """
+    try:
+        # Lazy import to avoid loading PaperQA unless needed
+        from paperqa import Docs, Settings
+        from paperqa.settings import AnswerSettings
+        from pathlib import Path
+        import os
+
+        # Get configuration
+        from src.config import get_global_config
+        config = get_global_config()
+
+        # Check for required API key based on provider and ensure it's in os.environ for LiteLLM
+        if config.paperqa_llm.startswith("openrouter/"):
+            api_key = os.getenv("OPENROUTER_API_KEY")
+            if not api_key:
+                return ToolResult(
+                    False,
+                    None,
+                    "OPENROUTER_API_KEY not found. Set it in .env file or environment."
+                )
+            # Explicitly set in os.environ for LiteLLM to find
+            os.environ["OPENROUTER_API_KEY"] = api_key
+            
+            # TRICK: For embeddings via OpenRouter, we use openai/ prefix models but point to OpenRouter
+            # This bypasses LiteLLM's "Unmapped LLM provider" error for openrouter embeddings
+            # We configure OpenAI provider to use OpenRouter's base URL and API key
+            if config.paperqa_embedding.startswith("openai/"):
+                os.environ["OPENAI_API_KEY"] = api_key
+                os.environ["OPENAI_API_BASE"] = "https://openrouter.ai/api/v1"
+                
+        elif config.paperqa_llm.startswith("openai:") or config.paperqa_embedding.startswith("text-embedding"):
+            if not os.getenv("OPENAI_API_KEY"):
+                return ToolResult(
+                    False,
+                    None,
+                    "OPENAI_API_KEY not found. Set it in .env file or environment."
+                )
+
+        # Use provided paper_dir or fall back to config
+        if paper_dir is None:
+            paper_dir = config.paper_library_dir
+
+        paper_dir_path = Path(paper_dir)
+
+        # Check if local papers exist
+        has_local_papers = paper_dir_path.exists() and any(paper_dir_path.glob("**/*.pdf"))
+
+        # Adjust mode based on available resources
+        if mode == "local" and not has_local_papers:
+            return ToolResult(
+                False,
+                None,
+                f"No local papers found in {paper_dir}. Use mode='online' or add PDFs to the directory."
+            )
+
+        if mode == "auto":
+            # Auto mode: use local if available, otherwise online
+            if has_local_papers:
+                actual_mode = "hybrid"  # Both local and online
+            else:
+                actual_mode = "online"
+        else:
+            actual_mode = mode
+
+        # Initialize PaperQA settings
+        # For local embeddings, check if it's a sentence-transformers model
+        embedding_config = config.paperqa_embedding
+
+        # Check if using local embedding (no provider prefix)
+        is_local_embedding = not any(
+            embedding_config.startswith(prefix)
+            for prefix in ["openrouter/", "openai:", "text-embedding"]
+        )
+
+        if is_local_embedding:
+            # For local embeddings with paper-qa[local], use the model name as-is
+            # but ensure it's in the correct format
+            if not embedding_config.startswith("sentence-transformers/"):
+                # Remove 'st-' prefix if present and add proper prefix
+                model_name = embedding_config.replace("st-", "", 1)
+                embedding_config = model_name  # PaperQA[local] handles the prefix
+
+        # Create settings with reduced token usage for free models
+        settings_kwargs = {
+            "llm": config.paperqa_llm,
+            "embedding": embedding_config,
+        }
+
+        # Reduce token usage if using free model
+        if ":free" in config.paperqa_llm.lower():
+            settings_kwargs["answer"] = AnswerSettings(
+                answer_max_sources=min(max_sources, 3),  # Reduce sources for free models
+                evidence_k=5,  # Reduce evidence contexts
+            )
+        else:
+            settings_kwargs["answer"] = AnswerSettings(
+                answer_max_sources=max_sources,
+                evidence_k=10
+            )
+
+        settings = Settings(**settings_kwargs)
+
+        # Create document collection
+        docs = Docs()
+
+        sources_used = []
+
+        # Add local papers if requested
+        if actual_mode in ["local", "hybrid"]:
+            pdf_count = 0
+            pdf_errors = []
+            for pdf_file in paper_dir_path.glob("**/*.pdf"):
+                try:
+                    docs.add(str(pdf_file), settings=settings)
+                    pdf_count += 1
+                except Exception as e:
+                    # Track errors but continue
+                    pdf_errors.append(f"{pdf_file.name}: {str(e)[:100]}")
+
+            sources_used.append(f"local_library ({pdf_count} PDFs)")
+
+            # Report errors if any PDFs failed to load
+            if pdf_errors and pdf_count == 0:
+                return ToolResult(
+                    False,
+                    None,
+                    f"Failed to load any PDFs from {paper_dir}. Errors: {'; '.join(pdf_errors[:3])}"
+                )
+
+        # Add online search if requested
+        if actual_mode in ["online", "hybrid"]:
+            import requests
+            import urllib.parse
+            import tempfile
+            import xml.etree.ElementTree as ET
+
+            total_papers_added = 0
+
+            # Try Semantic Scholar first (good for general scientific papers)
+            try:
+                s2_url = "https://api.semanticscholar.org/graph/v1/paper/search"
+                params = {
+                    "query": question,
+                    "limit": max_sources,
+                    "fields": "title,authors,year,abstract,openAccessPdf,externalIds,citationCount"
+                }
+
+                headers = {}
+                if s2_api_key := os.getenv("SEMANTIC_SCHOLAR_API_KEY"):
+                    headers["x-api-key"] = s2_api_key
+
+                response = requests.get(s2_url, params=params, headers=headers, timeout=30.0)
+                response.raise_for_status()
+                search_data = response.json()
+
+                papers_data = search_data.get("data", [])
+                s2_papers_added = 0
+
+                for paper in papers_data[:max_sources]:
+                    try:
+                        pdf_info = paper.get("openAccessPdf")
+                        if not pdf_info or not pdf_info.get("url"):
+                            # Try arXiv if available
+                            external_ids = paper.get("externalIds", {})
+                            arxiv_id = external_ids.get("ArXiv")
+                            if arxiv_id:
+                                pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+                            else:
+                                continue
+                        else:
+                            pdf_url = pdf_info["url"]
+
+                        title = paper.get("title", "Unknown")
+                        year = paper.get("year", "")
+                        authors = paper.get("authors", [])
+                        author_names = ", ".join([a.get("name", "") for a in authors[:3]])
+                        if len(authors) > 3:
+                            author_names += " et al."
+
+                        citation = f"{author_names}. {title}. {year}" if year else f"{author_names}. {title}"
+
+                        # Download PDF with proper headers to avoid 403 errors
+                        pdf_headers = {
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                        }
+                        pdf_response = requests.get(pdf_url, headers=pdf_headers, timeout=60)
+                        pdf_response.raise_for_status()
+
+                        # Verify it's actually a PDF
+                        content_type = pdf_response.headers.get("Content-Type", "")
+                        if "pdf" not in content_type.lower() and not pdf_response.content.startswith(b"%PDF"):
+                            continue
+
+                        # Save to temporary file and add to docs
+                        with tempfile.NamedTemporaryFile(mode='wb', suffix='.pdf', delete=False) as tmp_file:
+                            tmp_file.write(pdf_response.content)
+                            tmp_path = tmp_file.name
+
+                        try:
+                            docs.add(tmp_path, citation=citation, settings=settings)
+                            s2_papers_added += 1
+                        finally:
+                            # Clean up temporary file
+                            try:
+                                os.unlink(tmp_path)
+                            except Exception:
+                                pass
+
+                    except Exception:
+                        continue
+
+                if s2_papers_added > 0:
+                    sources_used.append(f"semantic_scholar ({s2_papers_added} papers)")
+                    total_papers_added += s2_papers_added
+
+            except Exception:
+                pass
+
+            # Try PubMed/PMC (good for biomedical papers)
+            try:
+                search_term = urllib.parse.quote(question)
+                search_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={search_term}&retmode=json&retmax={max_sources}"
+
+                search_response = requests.get(search_url, timeout=30)
+                search_response.raise_for_status()
+                search_data = search_response.json()
+
+                pmids = search_data.get("esearchresult", {}).get("idlist", [])
+                pmc_papers_added = 0
+
+                for pmid in pmids[:max_sources]:
+                    try:
+                        # Check if paper is available in PMC (open access)
+                        pmc_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/idconv/v1.0/?ids={pmid}&format=json"
+                        pmc_response = requests.get(pmc_url, timeout=30)
+                        pmc_data = pmc_response.json()
+
+                        records = pmc_data.get("records", [])
+                        if records and records[0].get("pmcid"):
+                            pmcid = records[0]["pmcid"]
+
+                            # Get paper details for citation
+                            details_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id={pmid}&retmode=json"
+                            details_response = requests.get(details_url, timeout=30)
+                            details_data = details_response.json()
+
+                            paper_info = details_data.get("result", {}).get(pmid, {})
+                            title = paper_info.get("title", "Unknown")
+                            authors = paper_info.get("authors", [])
+                            author_names = ", ".join([a.get("name", "") for a in authors[:3]])
+                            if len(authors) > 3:
+                                author_names += " et al."
+
+                            # PMC PDF URL
+                            pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/"
+
+                            citation = f"{author_names}. {title}. PMID: {pmid}"
+
+                            # Download PDF with proper headers
+                            pdf_headers = {
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                            }
+                            pdf_response = requests.get(pdf_url, headers=pdf_headers, timeout=60)
+                            pdf_response.raise_for_status()
+
+                            # Save to temporary file and add to docs
+                            with tempfile.NamedTemporaryFile(mode='wb', suffix='.pdf', delete=False) as tmp_file:
+                                tmp_file.write(pdf_response.content)
+                                tmp_path = tmp_file.name
+
+                            try:
+                                docs.add(tmp_path, citation=citation, settings=settings)
+                                pmc_papers_added += 1
+                            finally:
+                                # Clean up temporary file
+                                try:
+                                    os.unlink(tmp_path)
+                                except Exception:
+                                    pass
+
+                    except Exception:
+                        continue
+
+                if pmc_papers_added > 0:
+                    sources_used.append(f"pubmed_pmc ({pmc_papers_added} papers)")
+                    total_papers_added += pmc_papers_added
+
+            except Exception:
+                pass
+
+        # Query the combined document collection
+        answer_obj = docs.query(question, settings=settings)
+
+        # Extract contexts and references
+        contexts = [
+            {
+                "text": ctx.context,
+                "citation": ctx.text.name if hasattr(ctx.text, 'name') else "Unknown",
+                "score": ctx.score if hasattr(ctx, 'score') else None
+            }
+            for ctx in answer_obj.contexts
+        ]
+
+        return ToolResult(True, {
+            "answer": answer_obj.answer,
+            "contexts": contexts,
+            "references": answer_obj.references if hasattr(answer_obj, 'references') else [],
+            "sources_used": sources_used,
+            "mode": actual_mode
+        })
+
+    except ImportError as e:
+        return ToolResult(
+            False,
+            None,
+            "PaperQA not installed. Run: pip install paper-qa"
+        )
+    except Exception as e:
+        return ToolResult(False, None, f"Literature search error: {str(e)}")
 
 
 def get_tool_definitions() -> list[dict[str, Any]]:
@@ -491,7 +882,7 @@ def get_tool_definitions() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "query_database",
-                "description": "Query one of the competition databases (DrugBank, BindingDB, Pharos, STRING, GWAS). Use 'info' query to see database structure and available files.",
+                "description": "Query one of the competition databases (DrugBank, BindingDB, Pharos, STRING, GWAS). For large databases (BindingDB, GWAS), searches automatically iterate through chunks until finding enough results. Use 'info' query to see database structure.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -501,11 +892,11 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                         },
                         "query": {
                             "type": "string",
-                            "description": "Query specification: 'info' for database info, 'file:filename' for specific file, 'Column:value' for search, or 'all' for sample rows",
+                            "description": "Query specification: 'info' for database info, 'file:filename' for specific file, 'Column:value' for search (will search iteratively through file), or 'all' for sample rows",
                         },
                         "limit": {
                             "type": "integer",
-                            "description": "Maximum number of rows to return (default: 10, max: 50 recommended)",
+                            "description": "Maximum number of rows to return (default: 10). For searches, this is the target number of matches to find.",
                             "default": 10,
                         },
                     },
@@ -527,6 +918,38 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                         }
                     },
                     "required": ["file_path"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_literature",
+                "description": "Advanced AI-powered literature search using PaperQA. Searches local PDF library and/or online databases (PubMed, arXiv), reads full-text papers, and generates evidence-based answers with citations. More rigorous than search_pubmed - use this when you need detailed, cited information from research papers.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "Research question to answer in natural language (e.g., 'What are the mechanisms of EGFR inhibitor resistance?')",
+                        },
+                        "mode": {
+                            "type": "string",
+                            "description": "Search mode: 'local' (only local PDFs), 'online' (only internet search), 'auto' (use both if available, default)",
+                            "enum": ["local", "online", "auto"],
+                            "default": "auto",
+                        },
+                        "paper_dir": {
+                            "type": "string",
+                            "description": "Optional: Override default paper library directory (uses configured default if not provided)",
+                        },
+                        "max_sources": {
+                            "type": "integer",
+                            "description": "Maximum number of source contexts to retrieve (default: 5)",
+                            "default": 5,
+                        },
+                    },
+                    "required": ["question"],
                 },
             },
         },

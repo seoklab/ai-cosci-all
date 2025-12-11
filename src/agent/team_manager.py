@@ -1,8 +1,9 @@
 """Team management and dynamic team composition for Virtual Lab."""
 
 import json
-from typing import Any, Optional
-from src.agent.agent import AgentPersona
+from typing import Any
+from src.agent.agent import AgentPersona, get_max_tokens_for_model
+from src.agent.openrouter_client import OpenRouterPrivacyError
 
 
 def create_research_team(
@@ -89,7 +90,7 @@ Now design the team for the research question above. Output JSON only:"""
             "messages": messages,
             "tools": [],  # PI doesn't use tools for team design
             "temperature": 0.3,  # Lower temperature for consistent team design
-            "max_tokens": 1500,
+            "max_tokens": get_max_tokens_for_model(client.model),
         }
 
         # Add system prompt if using Anthropic
@@ -126,8 +127,15 @@ Now design the team for the research question above. Output JSON only:"""
 
         return valid_specs
 
+    except OpenRouterPrivacyError as _e:
+        # Privacy / data policy issue with OpenRouter — give actionable guidance
+        print("Warning: Team design failed due to OpenRouter data/privacy settings.")
+        print("Hint: If you're using a free OpenRouter model, enable 'Free model publication' at:")
+        print("  https://openrouter.ai/settings/privacy")
+        print("Or select a different model that doesn't require data publication. Using default team.")
+        return _get_default_team()
     except Exception as e:
-        # If anything goes wrong, return a sensible default team
+        # If anything else goes wrong, return a sensible default team
         print(f"Warning: Team design failed ({e}), using default team")
         return _get_default_team()
 

@@ -97,10 +97,18 @@ class AnthropicClient:
         content = response.get("content", [])
         for block in content:
             if block.get("type") == "tool_use":
+                tool_name = block.get("name", "")
+                tool_input = block.get("input", {})
+
+                # Validate arguments are not empty for functions that require parameters
+                if tool_name == "execute_python" and not tool_input.get("code"):
+                    # Skip execute_python calls without code parameter
+                    continue
+
                 tool_calls.append({
                     "id": block.get("id", ""),
-                    "name": block.get("name", ""),
-                    "input": block.get("input", {})
+                    "name": tool_name,
+                    "input": tool_input
                 })
 
         return tool_calls
