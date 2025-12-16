@@ -577,5 +577,8 @@ import logging
 logging.getLogger("LiteLLM").setLevel(logging.ERROR)
 ```
 
+## Citation
+This work uses team meeting idea from **Virtual Lab** (Swanson, K., Wu, W., Bulaong, N.L. et al. The Virtual Lab of AI agents designs new SARS-CoV-2 nanobodies. Nature (2025). https://doi.org/10.1038/s41586-025-09442-9) 
+
 
 **Last Updated**: December 2025
