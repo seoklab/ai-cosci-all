@@ -425,15 +425,6 @@ Specify custom path:
 python -m src.cli --question "..." --output results/my_answer.md
 ```
 
-## Common Issues
-
-### LiteLLM Warnings
-```
-LiteLLM:WARNING: Cannot add callback - would exceed MAX_CALLBACKS limit of 30
-```
-
-**This is normal!** PaperQA uses LiteLLM internally. The warnings don't affect functionality.
-
 ---
 
 ### Model Name Formats
@@ -558,8 +549,6 @@ python test-script/test_consensus.py
 
 ## FAQ
 
-**Q: Why does PaperQA use LiteLLM?**
-A: PaperQA library uses LiteLLM as a unified interface to support multiple LLM providers (OpenAI, Anthropic, OpenRouter, etc.) without needing separate code for each.
 
 **Q: Can I use a different model for consensus?**
 A: Yes! Edit `DEFAULT_CONSENSUS_MODELS` in `src/virtuallab_workflow/consensus.py`, or pass `consensus_models` parameter when calling programmatically.
