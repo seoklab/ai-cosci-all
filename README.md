@@ -577,10 +577,5 @@ import logging
 logging.getLogger("LiteLLM").setLevel(logging.ERROR)
 ```
 
-## License
-
-See LICENSE file.
-
----
 
 **Last Updated**: December 2025
