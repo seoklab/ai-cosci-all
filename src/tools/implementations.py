@@ -65,6 +65,9 @@ class PersistentPythonExecutor:
         Returns:
             Tuple of (success, output, error)
         """
+        # Import here to avoid circular dependency
+        from src.utils.output_manager import get_current_run_dir
+
         # Capture stdout/stderr
         old_stdout = sys.stdout
         old_stderr = sys.stderr
@@ -72,6 +75,15 @@ class PersistentPythonExecutor:
         sys.stderr = StringIO()
 
         try:
+            # Inject OUTPUT_DIR variable if a run directory is set
+            # This allows agents to save files to the correct location without changing cwd
+            run_dir = get_current_run_dir()
+            if run_dir:
+                self.globals_dict['OUTPUT_DIR'] = str(run_dir)
+            else:
+                # Fallback to current directory if no run directory is set
+                self.globals_dict['OUTPUT_DIR'] = os.getcwd()
+
             # Execute code in persistent namespace
             exec(code, self.globals_dict, self.locals_dict)
 
@@ -105,6 +117,25 @@ class PersistentPythonExecutor:
 
 # Global persistent executor instance
 _persistent_executor = PersistentPythonExecutor()
+
+# ============================================================================
+# LITERATURE SEARCH CACHING INFRASTRUCTURE
+# ============================================================================
+# These module-level caches persist across iterations to avoid re-processing
+# papers that have already been indexed and embedded.
+# ============================================================================
+
+# Cache for SearchIndex (handles local PDF library with persistent disk storage)
+_local_paper_index = None
+_local_paper_index_dir = None
+
+# Cache for online papers already downloaded and processed
+# Key: (doi or url), Value: dockey
+_online_papers_cache = {}
+
+# Persistent Docs object that accumulates all papers (local + online)
+_cached_docs = None
+_cached_docs_settings_hash = None
 
 
 def execute_python(code: str, timeout: int = 30, reset: bool = False) -> ToolResult:
@@ -761,8 +792,10 @@ def search_literature(
             "embedding": embedding_config,
             "parsing": ParsingSettings(
                 use_doc_details=use_llm_during_parsing,  # Enable LLM for document metadata extraction (paid models only)
-                chunk_size=3000,  # Standard chunk size
-                overlap=100,  # Standard overlap
+                reader_config={
+                    "chunk_chars": 3000,  # Standard chunk size (in characters, not tokens)
+                    "overlap": 100  # Standard overlap
+                },
                 multimodal=False,  # Disable image/figure processing for now
                 enrichment_llm=config.paperqa_llm,  # Use same LLM for enrichment (vision tasks)
             )
@@ -1089,25 +1122,33 @@ def get_tool_definitions() -> list[dict[str, Any]]:
     Returns:
         List of tool definition dicts
     """
-    return [
+    # Check if we should include search_pubmed
+    from src.config import get_global_config
+    config = get_global_config()
+
+    tools = [
         {
             "type": "function",
             "function": {
                 "name": "execute_python",
-                "description": "Execute Python code to analyze data, perform calculations, or create visualizations. Use for bioinformatics analysis.",
+                "description": "Execute Python code to analyze data, perform calculations, or create visualizations. Use for bioinformatics analysis. IMPORTANT: When saving output files (CSV, plots, etc.), prefix paths with OUTPUT_DIR to organize files properly (e.g., f'{OUTPUT_DIR}/results.csv'). OUTPUT_DIR is automatically available in your code.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "code": {
                             "type": "string",
-                            "description": "Python code to execute. Assume pandas, numpy, biopython are available.",
+                            "description": "Python code to execute. Assume pandas, numpy, biopython are available. Use OUTPUT_DIR variable to save files (e.g., df.to_csv(f'{OUTPUT_DIR}/output.csv')).",
                         }
                     },
                     "required": ["code"],
                 },
             },
         },
-        {
+    ]
+
+    # Conditionally add search_pubmed
+    if not config.use_paperqa_only:
+        tools.append({
             "type": "function",
             "function": {
                 "name": "search_pubmed",
@@ -1128,7 +1169,10 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                     "required": ["query"],
                 },
             },
-        },
+        })
+
+    # Continue with remaining tools
+    tools.extend([
         {
             "type": "function",
             "function": {
@@ -1210,7 +1254,11 @@ def get_tool_definitions() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "search_literature",
-                "description": "Advanced AI-powered literature search using PaperQA. **USE THIS TO VERIFY PAPERS BEFORE CITING THEM**. PRIORITIZES local PDF library first, then supplements with online databases (PubMed, arXiv) if needed. Reads full-text papers and generates evidence-based answers with citations. More rigorous than search_pubmed - use this when you need detailed, cited information from research papers. If you mention a paper (e.g., 'Philip et al. Nature 2017'), you MUST use this tool with mode='online' to fetch and verify it. Default 'auto' mode checks local PDFs first and only searches online if local papers don't provide a good answer.",
+                "description": "Advanced AI-powered literature search using PaperQA. " + (
+                    "**PRIMARY LITERATURE TOOL - USE THIS FOR ALL LITERATURE SEARCHES**. Searches online databases (PubMed, arXiv, Semantic Scholar), downloads papers, reads full-text content, and generates evidence-based answers with citations. If you mention a paper (e.g., 'Philip et al. Nature 2017'), you MUST use this tool with mode='online' to fetch and verify it."
+                    if config.use_paperqa_only else
+                    "**USE THIS TO VERIFY PAPERS BEFORE CITING THEM**. PRIORITIZES local PDF library first, then supplements with online databases (PubMed, arXiv) if needed. Reads full-text papers and generates evidence-based answers with citations. More rigorous than search_pubmed - use this when you need detailed, cited information from research papers."
+                ) + " Default 'auto' mode checks local PDFs first and only searches online if local papers don't provide a good answer.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -1238,4 +1286,6 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                 },
             },
         },
-    ]
+    ])
+
+    return tools
