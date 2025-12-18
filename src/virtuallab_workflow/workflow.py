@@ -312,6 +312,7 @@ def run_consensus_workflow(
         "question": question,
         "team_size": team_size,
         "num_rounds": num_rounds,
+        "max_iterations": max_iterations,  # Add max_iterations to state
         "question_type": "",
         "question_complexity": "",
         "team_composition": [],

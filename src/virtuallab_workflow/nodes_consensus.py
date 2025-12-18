@@ -14,6 +14,7 @@ def virtual_lab_consensus_node(state: ResearchState) -> dict:
     question = state["question"]
     team_size = state.get("team_size", 3)
     num_rounds = state.get("num_rounds", 2)
+    max_iterations = state.get("max_iterations", 30)  # Get from state
     
     # Models for consensus (can be configured via state)
     consensus_models = state.get("consensus_models", DEFAULT_CONSENSUS_MODELS)
@@ -24,6 +25,7 @@ def virtual_lab_consensus_node(state: ResearchState) -> dict:
             models=consensus_models,
             team_size=team_size,
             num_rounds=num_rounds,
+            max_iterations=max_iterations,  # Pass max_iterations
             verbose=True
         )
         
