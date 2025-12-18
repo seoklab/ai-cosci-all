@@ -209,6 +209,9 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
         """
         self.conversation_history = []
         self.add_message("system", self.get_system_prompt())
+        self.conversation_history = [
+            {"role": "system", "content": self.get_system_prompt()}
+        ]
         self.add_message("user", user_question)
 
         if verbose:
