@@ -1,6 +1,7 @@
 """Command-line interface for the bioinformatics agent."""
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ load_dotenv()
 
 from src.agent.agent import create_agent
 from src.agent.meeting import run_virtual_lab
+from src.evaluation.evaluator import AnswerEvaluator, EvaluationStrategy
 from src.virtuallab_workflow.workflow import run_consensus_workflow, run_research_workflow
 
 
@@ -190,6 +192,43 @@ Examples:
         type=str,
         help="Save the final answer to a file (supports .md, .txt). Auto-generates filename if not specified.",
     )
+    parser.add_argument(
+        "--evaluate",
+        "-e",
+        action="store_true",
+        help="Evaluate answer using FastChat LLM judge pipeline",
+    )
+    parser.add_argument(
+        "--judge-model",
+        type=str,
+        default="gpt-4",
+        help="LLM judge model for evaluation (default: gpt-4)",
+    )
+    parser.add_argument(
+        "--judge-api-provider",
+        type=str,
+        default="openai",
+        choices=["openai", "anthropic", "openrouter"],
+        help="API provider for judge model (default: openai)",
+    )
+    parser.add_argument(
+        "--compare",
+        nargs="+",
+        type=str,
+        help="Compare multiple answers from a file (JSON format with model_name -> answer mapping)",
+    )
+    parser.add_argument(
+        "--eval-categories",
+        nargs="+",
+        type=str,
+        help="Specific evaluation categories to use (default: all available)",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=30,
+        help="Maximum number of agent reasoning iterations (default: 30). Use 3 for quick testing.",
+    )
 
     args = parser.parse_args()
 
@@ -219,7 +258,8 @@ Examples:
                 model=args.model,
                 provider=provider,
                 data_dir=args.data_dir,
-                input_dir=args.input_dir
+                input_dir=args.input_dir,
+                max_iterations=args.max_iterations
             )
         except ValueError as e:
             print(f"Error: {e}", file=sys.stderr)
@@ -333,6 +373,35 @@ Examples:
             print("=" * 60)
             print(response)
 
+            # Evaluate if requested
+            if args.evaluate:
+                print("\n" + "=" * 60)
+                print("EVALUATING ANSWER WITH FASTCHAT JUDGE")
+                print("=" * 60)
+                try:
+                    answer, evaluation = agent.run_with_fastchat_critic(
+                        args.question,
+                        verbose=args.verbose,
+                        judge_model=args.judge_model,
+                        judge_api_provider=args.judge_api_provider,
+                        categories=args.eval_categories,
+                    )
+                    
+                    if evaluation:
+                        print(f"\nOverall Score: {evaluation.overall_score:.1f}/10")
+                        print(f"Assessment: {evaluation.overall_reasoning}\n")
+                        
+                        if evaluation.scores:
+                            print("Category Breakdown:")
+                            for category, score in sorted(evaluation.scores.items()):
+                                print(f"  - {category.replace('_', ' ').title()}: {score.score:.1f}/10")
+                            print()
+                except Exception as e:
+                    print(f"Evaluation failed: {e}")
+                    if args.verbose:
+                        import traceback
+                        traceback.print_exc()
+
             # Save to file
             output_file = save_answer_to_file(response, args.question, args.output, mode="single-agent")
             print(f"\n✓ Answer saved to: {output_file}")
@@ -417,6 +486,76 @@ Examples:
                 output_file = save_answer_to_file(response, question, mode="single-agent")
                 print(f"✓ Saved to: {output_file}")
                 print()
+
+    elif args.compare:
+        # Comparison mode - evaluate multiple answers
+        print("\n" + "=" * 60)
+        print("ANSWER COMPARISON MODE")
+        print("=" * 60)
+
+        if not args.question:
+            print("Error: --question is required for comparison mode", file=sys.stderr)
+            sys.exit(1)
+
+        # Load answers to compare
+        all_answers = {}
+        for answer_file in args.compare:
+            try:
+                with open(answer_file, 'r') as f:
+                    data = json.load(f)
+                    # Handle both {model: answer} and {model: {answer: ...}} formats
+                    for model_name, content in data.items():
+                        if isinstance(content, dict) and 'answer' in content:
+                            all_answers[model_name] = content['answer']
+                        else:
+                            all_answers[model_name] = str(content)
+                print(f"✓ Loaded {len(data)} model(s) from {answer_file}")
+            except Exception as e:
+                print(f"Error loading {answer_file}: {e}", file=sys.stderr)
+                sys.exit(1)
+
+        if not all_answers:
+            print("Error: No answers found to compare", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"Comparing {len(all_answers)} models on question:\n  {args.question}\n")
+
+        # Create evaluator
+        evaluator = AnswerEvaluator(
+            strategy=EvaluationStrategy.FASTCHAT,
+            judge_model=args.judge_model,
+            api_provider=args.judge_api_provider,
+        )
+
+        # Evaluate all answers
+        results = evaluator.evaluate_multiple(
+            args.question,
+            all_answers,
+            categories=args.eval_categories,
+        )
+
+        # Generate and print report
+        comparison_metrics = evaluator.compute_comparison_metrics(args.question, results)
+        report = evaluator.generate_report(
+            args.question,
+            results,
+            comparison_metrics,
+            include_details=True,
+        )
+
+        print(report)
+
+        # Save report to file
+        if args.output:
+            output_path = args.output
+        else:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            output_path = f"comparison_report_{timestamp}.md"
+
+        with open(output_path, 'w') as f:
+            f.write(report)
+        
+        print(f"\n✓ Comparison report saved to: {output_path}")
 
     else:
         # No input provided

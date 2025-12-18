@@ -7,6 +7,7 @@ from typing import Any, Optional
 from dataclasses import dataclass
 from src.agent.openrouter_client import OpenRouterClient
 from src.agent.anthropic_client import AnthropicClient
+from src.agent.fastchat_critic import FastChatCritic, EvaluationResult
 from src.tools.implementations import (
     execute_python,
     search_pubmed,
@@ -46,7 +47,7 @@ class AgentPersona:
 class BioinformaticsAgent:
     """Agent for answering complex bioinformatics questions."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-20250514", provider: str = "anthropic", data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data", input_dir: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-20250514", provider: str = "anthropic", data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data", input_dir: Optional[str] = None, max_iterations: int = 30):
         """Initialize the agent.
 
         Args:
@@ -55,6 +56,7 @@ class BioinformaticsAgent:
             provider: 'anthropic' or 'openrouter'
             data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
             input_dir: Path to question-specific input data (defaults to data_dir)
+            max_iterations: Maximum number of reasoning iterations (default: 30)
         """
         if provider == "anthropic":
             self.client = AnthropicClient(api_key=api_key, model=model)
@@ -71,7 +73,7 @@ class BioinformaticsAgent:
             "find_files": find_files,
         }
         self.conversation_history = []
-        self.max_iterations = 30  # Increased from 10 to allow complex multi-step analyses
+        self.max_iterations = max_iterations
 
     def get_system_prompt(self) -> str:
         """Get the system prompt for scientific reasoning.
@@ -506,9 +508,94 @@ Please provide an improved answer that addresses the critique's suggestions. Foc
             print(f"{'='*60}\n")
 
         return initial_answer, critique, final_answer
+    
+    def run_with_fastchat_critic(
+        self,
+        user_question: str,
+        verbose: bool = False,
+        judge_model: str = "gpt-4",
+        judge_api_provider: str = "openai",
+        judge_api_key: Optional[str] = None,
+        categories: Optional[list[str]] = None,
+    ) -> tuple[str, EvaluationResult]:
+        """Run agent and evaluate answer using FastChat's LLM judge pipeline.
+
+        This method generates an answer and then evaluates it using the FastChat
+        critic, which uses a configurable LLM judge model with structured evaluation.
+
+        Args:
+            user_question: The question to answer
+            verbose: Print intermediate steps
+            judge_model: LLM judge model (default: gpt-4)
+            judge_api_provider: Judge API provider (openai, anthropic, openrouter)
+            judge_api_key: API key for judge model
+            categories: Specific evaluation categories (if None, use all available)
+
+        Returns:
+            Tuple of (answer, evaluation_result)
+        """
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"RUNNING WITH FASTCHAT CRITIC EVALUATION")
+            print(f"{'='*60}\n")
+
+        # Step 1: Get answer from agent
+        if verbose:
+            print("[STEP 1: Main Agent Analysis]")
+        answer = self.run(user_question, verbose=verbose)
+
+        if not answer:
+            raise RuntimeError("Agent failed to generate an answer")
+
+        # Step 2: Evaluate answer using FastChat critic
+        if verbose:
+            print(f"\n{'='*60}")
+            print("[STEP 2: FastChat LLM Judge Evaluation]")
+            print(f"{'='*60}\n")
+
+        try:
+            critic = FastChatCritic(
+                judge_model=judge_model,
+                api_provider=judge_api_provider,
+                api_key=judge_api_key,
+                temperature=0.3,  # Low temperature for consistent evaluation
+            )
+
+            evaluation = critic.evaluate(
+                question=user_question,
+                answer=answer,
+                categories=categories,
+                include_all_categories=categories is None,
+            )
+
+            if verbose:
+                print(f"Overall Score: {evaluation.overall_score:.1f}/10")
+                print(f"Assessment: {evaluation.overall_reasoning}\n")
+                
+                # Print category scores
+                if evaluation.scores:
+                    print("Category Breakdown:")
+                    for category, score in evaluation.scores.items():
+                        print(f"  - {category.replace('_', ' ').title()}: {score.score:.1f}/10")
+                    print()
+
+        except Exception as e:
+            if verbose:
+                print(f"[WARNING: FastChat critic evaluation failed: {e}]")
+                print("[Proceeding with basic evaluation]\n")
+            
+            # Fallback to basic evaluation if FastChat fails
+            evaluation = None
+
+        if verbose:
+            print(f"\n{'='*60}")
+            print("[COMPLETE: Answer generated and evaluated]")
+            print(f"{'='*60}\n")
+
+        return answer, evaluation
 
 
-def create_agent(api_key: Optional[str] = None, model: Optional[str] = None, provider: Optional[str] = None, data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data", input_dir: Optional[str] = None) -> BioinformaticsAgent:
+def create_agent(api_key: Optional[str] = None, model: Optional[str] = None, provider: Optional[str] = None, data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data", input_dir: Optional[str] = None, max_iterations: int = 30) -> BioinformaticsAgent:
     """Factory function to create an agent.
 
     Args:
@@ -517,6 +604,7 @@ def create_agent(api_key: Optional[str] = None, model: Optional[str] = None, pro
         provider: 'anthropic' or 'openrouter' (defaults to API_PROVIDER env var)
         data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
         input_dir: Path to question-specific input data (defaults to data_dir)
+        max_iterations: Maximum number of reasoning iterations (default: 30)
 
     Returns:
         BioinformaticsAgent instance
@@ -532,7 +620,7 @@ def create_agent(api_key: Optional[str] = None, model: Optional[str] = None, pro
         else:
             model = "anthropic/claude-sonnet-4"
 
-    return BioinformaticsAgent(api_key=api_key, model=model, provider=provider, data_dir=data_dir, input_dir=input_dir)
+    return BioinformaticsAgent(api_key=api_key, model=model, provider=provider, data_dir=data_dir, input_dir=input_dir, max_iterations=max_iterations)
 
 
 class ScientificAgent(BioinformaticsAgent):
@@ -550,7 +638,8 @@ class ScientificAgent(BioinformaticsAgent):
         model: str = "claude-sonnet-4-20250514",
         provider: str = "anthropic",
         data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
-        input_dir: Optional[str] = None
+        input_dir: Optional[str] = None,
+        max_iterations: int = 30
     ):
         """Initialize a scientific agent with a specific persona.
 
@@ -561,8 +650,9 @@ class ScientificAgent(BioinformaticsAgent):
             provider: 'anthropic' or 'openrouter'
             data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
             input_dir: Path to question-specific input data (defaults to data_dir)
+            max_iterations: Maximum number of reasoning iterations (default: 30)
         """
-        super().__init__(api_key, model, provider, data_dir, input_dir)
+        super().__init__(api_key, model, provider, data_dir, input_dir, max_iterations)
         self.persona = persona
 
     def get_system_prompt(self) -> str:
