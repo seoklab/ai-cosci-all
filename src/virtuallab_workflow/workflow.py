@@ -288,7 +288,8 @@ def run_consensus_workflow(
     team_size: int = 3,
     num_rounds: int = 2,
     thread_id: str = "default",
-    verbose: bool = True
+    verbose: bool = True,
+    max_iterations: int = 30
 ) -> dict:
     """Run a research question through the Consensus LangGraph workflow.
     
@@ -298,6 +299,7 @@ def run_consensus_workflow(
         num_rounds: Number of discussion rounds
         thread_id: Unique thread ID for state persistence
         verbose: Print execution details
+        max_iterations: Maximum number of reasoning iterations per agent (default: 30)
         
     Returns:
         Final state dictionary with answer and metadata

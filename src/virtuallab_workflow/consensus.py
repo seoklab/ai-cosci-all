@@ -20,7 +20,7 @@ def run_consensus_meeting(
     provider: str = "openrouter",
     team_size: int = 3,
     num_rounds: int = 2,
-    max_iterations: int = 10,
+    max_iterations: int = 30,
     data_dir: Optional[str] = None,
     verbose: bool = True
 ) -> Dict[str, Any]:
@@ -101,7 +101,8 @@ def run_consensus_meeting(
                 api_key=api_key,
                 max_team_size=team_size,
                 verbose=verbose,
-                data_dir=data_dir
+                data_dir=data_dir,
+                max_iterations=max_iterations
             )
             
             answer = meeting.run_meeting(num_rounds=num_rounds)

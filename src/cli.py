@@ -280,7 +280,8 @@ Examples:
                 team_size=args.team_size,
                 num_rounds=args.rounds,
                 thread_id=f"cli_combined_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-                verbose=args.verbose
+                verbose=args.verbose,
+                max_iterations=args.max_iterations
             )
             
             final_answer = result.get("final_answer", "No answer generated")
@@ -336,7 +337,8 @@ Examples:
                 max_team_size=args.team_size,
                 verbose=args.verbose,
                 data_dir=args.data_dir,
-                input_dir=args.input_dir
+                input_dir=args.input_dir,
+                max_iterations=args.max_iterations
             )
 
             print("\n" + "=" * 60)
@@ -367,19 +369,14 @@ Examples:
             output_file = save_answer_to_file(final, args.question, args.output, mode="with-critic")
             print(f"\n✓ Answer saved to: {output_file}")
         else:
-            response = agent.run(args.question, verbose=args.verbose)
-            print("\n" + "=" * 60)
-            print("Final Answer:")
-            print("=" * 60)
-            print(response)
-
-            # Evaluate if requested
+            # Check if evaluation is requested
             if args.evaluate:
+                # Run with evaluation - generates answer and evaluates it
                 print("\n" + "=" * 60)
-                print("EVALUATING ANSWER WITH FASTCHAT JUDGE")
+                print("RUNNING WITH FASTCHAT EVALUATION")
                 print("=" * 60)
                 try:
-                    answer, evaluation = agent.run_with_fastchat_critic(
+                    response, evaluation = agent.run_with_fastchat_critic(
                         args.question,
                         verbose=args.verbose,
                         judge_model=args.judge_model,
@@ -387,7 +384,15 @@ Examples:
                         categories=args.eval_categories,
                     )
                     
+                    print("\n" + "=" * 60)
+                    print("Final Answer:")
+                    print("=" * 60)
+                    print(response)
+                    
                     if evaluation:
+                        print("\n" + "=" * 60)
+                        print("EVALUATION RESULTS")
+                        print("=" * 60)
                         print(f"\nOverall Score: {evaluation.overall_score:.1f}/10")
                         print(f"Assessment: {evaluation.overall_reasoning}\n")
                         
@@ -401,6 +406,19 @@ Examples:
                     if args.verbose:
                         import traceback
                         traceback.print_exc()
+                    # Fallback to basic run if evaluation fails
+                    response = agent.run(args.question, verbose=args.verbose)
+                    print("\n" + "=" * 60)
+                    print("Final Answer:")
+                    print("=" * 60)
+                    print(response)
+            else:
+                # Normal run without evaluation
+                response = agent.run(args.question, verbose=args.verbose)
+                print("\n" + "=" * 60)
+                print("Final Answer:")
+                print("=" * 60)
+                print(response)
 
             # Save to file
             output_file = save_answer_to_file(response, args.question, args.output, mode="single-agent")
@@ -443,7 +461,8 @@ Examples:
                     max_team_size=args.team_size,
                     verbose=args.verbose,
                     data_dir=args.data_dir,
-                    input_dir=args.input_dir
+                    input_dir=args.input_dir,
+                    max_iterations=args.max_iterations
                 )
 
                 print("\n" + "=" * 60)

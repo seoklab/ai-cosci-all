@@ -33,7 +33,8 @@ class VirtualLabMeeting:
         max_team_size: int = 3,
         verbose: bool = False,
         data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
-        input_dir: Optional[str] = None
+        input_dir: Optional[str] = None,
+        max_iterations: int = 30
     ):
         """Initialize a Virtual Lab meeting.
 
@@ -46,6 +47,7 @@ class VirtualLabMeeting:
             verbose: Print detailed meeting transcript
             data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
             input_dir: Path to question-specific input data (defaults to data_dir)
+            max_iterations: Maximum number of reasoning iterations per agent (default: 30)
         """
         self.user_question = user_question
         self.verbose = verbose
@@ -67,7 +69,8 @@ class VirtualLabMeeting:
             model=model,
             provider=provider,
             data_dir=data_dir,
-            input_dir=self.input_dir
+            input_dir=self.input_dir,
+            max_iterations=max_iterations
         )
 
         # PI designs the research team
@@ -93,7 +96,8 @@ class VirtualLabMeeting:
                 model=model,
                 provider=provider,
                 data_dir=data_dir,
-                input_dir=self.input_dir
+                input_dir=self.input_dir,
+                max_iterations=max_iterations
             )
             for spec in team_specs
         ]
@@ -105,7 +109,8 @@ class VirtualLabMeeting:
             model=model,
             provider=provider,
             data_dir=data_dir,
-            input_dir=self.input_dir
+            input_dir=self.input_dir,
+            max_iterations=max_iterations
         )
 
         self.meeting_transcript = []
@@ -404,7 +409,8 @@ def run_virtual_lab(
     max_team_size: int = 3,
     verbose: bool = False,
     data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
-    input_dir: Optional[str] = None
+    input_dir: Optional[str] = None,
+    max_iterations: int = 30
 ) -> str:
     """Convenience function to run a Virtual Lab meeting.
 
@@ -418,6 +424,7 @@ def run_virtual_lab(
         verbose: Print detailed transcript
         data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
         input_dir: Path to question-specific input data (defaults to data_dir)
+        max_iterations: Maximum number of reasoning iterations per agent (default: 30)
 
     Returns:
         Final synthesized answer
@@ -441,7 +448,8 @@ def run_virtual_lab(
         max_team_size=max_team_size,
         verbose=verbose,
         data_dir=data_dir,
-        input_dir=input_dir
+        input_dir=input_dir,
+        max_iterations=max_iterations
     )
 
     final_answer = meeting.run_meeting(num_rounds=num_rounds)
