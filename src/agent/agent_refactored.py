@@ -1,4 +1,4 @@
-"""Core agent loop for the bioinformatics AI system."""
+"""Core agent with data-driven reasoning prompts for subtask-centric collaboration."""
 
 import json
 import os
@@ -19,19 +19,10 @@ from src.tools.implementations import (
 
 
 def get_max_tokens_for_model(model_name: str) -> int:
-    """Determine appropriate max_tokens based on model name.
-
-    Free models on OpenRouter have limited credits, so we use fewer tokens.
-
-    Args:
-        model_name: The model identifier (e.g., "openai/gpt-oss-120b:free")
-
-    Returns:
-        Maximum tokens to request (500 for free models, 4096 for paid)
-    """
+    """Determine appropriate max_tokens based on model name."""
     if ":free" in model_name.lower():
-        return 500  # Conservative limit for free tier
-    return 4096  # Higher limit for paid models to avoid truncation
+        return 500
+    return 4096
 
 
 @dataclass
@@ -47,63 +38,26 @@ class BioinformaticsAgent:
     """Agent for answering complex bioinformatics questions."""
 
     def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-20250514", provider: str = "anthropic", data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data", input_dir: Optional[str] = None):
-        """Initialize the agent.
-
-        Args:
-            api_key: API key (Anthropic or OpenRouter)
-            model: Model to use
-            provider: 'anthropic' or 'openrouter'
-            data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
-            input_dir: Path to question-specific input data (defaults to data_dir)
-        """
         if provider == "anthropic":
             self.client = AnthropicClient(api_key=api_key, model=model)
         else:
             self.client = OpenRouterClient(api_key=api_key, model=model)
         self.data_dir = data_dir
         self.input_dir = input_dir if input_dir is not None else data_dir
-
-        # Check if we should use only paper-qa for literature search
-        from src.config import get_global_config
-        config = get_global_config()
-
-        # Build tools dict - conditionally include search_pubmed
         self.tools = {
             "execute_python": execute_python,
+            "search_pubmed": search_pubmed,
             "search_literature": search_literature,
             "query_database": query_database,
             "read_file": read_file,
             "find_files": find_files,
         }
-
-        # Only add search_pubmed if not using paper-qa only mode
-        if not config.use_paperqa_only:
-            self.tools["search_pubmed"] = search_pubmed
-
         self.conversation_history = []
-        self.max_iterations = 30  # Increased from 10 to allow complex multi-step analyses
+        self.max_iterations = 30
 
     def get_system_prompt(self) -> str:
-        """Get the system prompt for scientific reasoning.
-
-        Returns:
-            System prompt string
-        """
-        # Check config for literature search mode
-        from src.config import get_global_config
-        config = get_global_config()
-
-        # Build literature search guidance based on mode
-        if config.use_paperqa_only:
-            lit_search_guide = """- **ALWAYS use `search_literature` for ALL literature searches**
-   - This tool searches online databases (PubMed, arXiv, Semantic Scholar) AND reads full papers
-   - Returns evidence-based answers with citations
-   - No need for separate abstract searches - this tool does everything"""
-        else:
-            lit_search_guide = """- Use `search_literature` for deep literature analysis (reads full papers)
-   - Use `search_pubmed` for quick abstract-level searches when full-text isn't needed"""
-
-        return f"""You are CoScientist, an expert AI research assistant for biomedical research. Your role is to help scientists answer complex, multi-step research questions through rigorous analysis, data exploration, and literature review.
+        """Get the system prompt for scientific reasoning."""
+        return """You are CoScientist, an expert AI research assistant for biomedical research. Your role is to help scientists answer complex, multi-step research questions through rigorous analysis, data exploration, and literature review.
 
 ## Core Capabilities
 - Analyze complex biological datasets and databases
@@ -135,10 +89,10 @@ class BioinformaticsAgent:
    - Consider alternative explanations
 
 4. **Literature Integration** (CRITICAL):
-   {lit_search_guide}
    - **VERIFY BEFORE CITING**: If you reference a paper (e.g., "Philip et al., Nature 2017"), you MUST use `search_literature` to fetch and read it BEFORE making claims about its content
    - **Don't guess**: Never say "likely X paper says Y" - actually fetch and read the paper to confirm
-   - Use `search_literature(mode='online')` to fetch papers from online databases (PubMed, arXiv, Semantic Scholar)
+   - Use `search_literature(mode='online')` to fetch papers from PubMed/arXiv if not in local library
+   - Use `search_pubmed` ONLY for quick abstract-level searches when full-text isn't needed
    - ALWAYS cite papers in this format: "Title" (PMID: 12345678)
    - Include the full paper title and PMID for every claim backed by literature
    - Example: "According to 'Chromatin states define tumour-specific T cell dysfunction and reprogramming' (PMID: 28193889), ..."
@@ -161,24 +115,11 @@ class BioinformaticsAgent:
 Remember: Your goal is to help scientists make informed decisions, not to provide definitive answers. Surface uncertainty honestly and help them understand where more research is needed."""
 
     def add_message(self, role: str, content: str):
-        """Add a message to conversation history.
-
-        Args:
-            role: 'user' or 'assistant'
-            content: Message content
-        """
+        """Add a message to conversation history."""
         self.conversation_history.append({"role": role, "content": content})
 
     def call_tool(self, tool_name: str, tool_input: dict[str, Any]) -> dict[str, Any]:
-        """Execute a tool and return the result.
-
-        Args:
-            tool_name: Name of the tool to call
-            tool_input: Input arguments for the tool
-
-        Returns:
-            Tool result as dict
-        """
+        """Execute a tool and return the result."""
         if tool_name not in self.tools:
             return {
                 "success": False,
@@ -188,13 +129,10 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
 
         try:
             tool_func = self.tools[tool_name]
-            # Add data_dir to query_database calls
             if tool_name == "query_database":
                 tool_input["data_dir"] = self.data_dir
-            # Add input_dir to read_file calls
             elif tool_name == "read_file":
                 tool_input["input_dir"] = self.input_dir
-            # Add data_dir to find_files calls
             elif tool_name == "find_files":
                 tool_input["data_dir"] = self.data_dir
             result = tool_func(**tool_input)
@@ -213,28 +151,13 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
             }
 
     def process_response(self, response: dict[str, Any]) -> tuple[Optional[str], list[dict[str, Any]]]:
-        """Process API response and extract text and tool calls.
-
-        Args:
-            response: Response from OpenRouter API
-
-        Returns:
-            Tuple of (response_text, tool_calls)
-        """
+        """Process API response and extract text and tool calls."""
         text = self.client.get_response_text(response)
         tool_calls = self.client.extract_tool_calls(response)
         return text, tool_calls
 
     def run(self, user_question: str, verbose: bool = False) -> str:
-        """Run the agent loop for a user question.
-
-        Args:
-            user_question: The question to answer
-            verbose: Print intermediate steps
-
-        Returns:
-            Final response from the agent
-        """
+        """Run the agent loop for a user question."""
         self.conversation_history = [
             {"role": "system", "content": self.get_system_prompt()}
         ]
@@ -249,8 +172,6 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
             if verbose:
                 print(f"[Iteration {iteration + 1}/{self.max_iterations}]")
 
-            # Get response from LLM
-            # Anthropic API requires system prompt separately
             call_params = {
                 "messages": self.conversation_history,
                 "tools": get_tool_definitions(),
@@ -258,15 +179,12 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
                 "max_tokens": get_max_tokens_for_model(self.client.model),
             }
 
-            # Add system prompt for Anthropic
             if isinstance(self.client, AnthropicClient):
                 call_params["system"] = self.get_system_prompt()
 
             response = self.client.create_message(**call_params)
-
             text, tool_calls = self.process_response(response)
 
-            # Check if response was truncated (hit token limit)
             finish_reason = None
             if response.get("choices") and len(response["choices"]) > 0:
                 finish_reason = response["choices"][0].get("finish_reason")
@@ -277,16 +195,13 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
                     if finish_reason:
                         print(f"[Finish reason: {finish_reason}]")
 
-            # If no tool calls, we're done
             if not tool_calls:
-                # Warn if response was truncated due to length
                 if finish_reason == "length":
                     if verbose:
                         print("\n[WARNING: Response was truncated due to max_tokens limit]")
                         print("[Agent completed - no more tools needed]")
                 elif verbose:
                     print("\n[Agent completed - no more tools needed]")
-                # Add the final assistant message
                 if text:
                     self.add_message("assistant", text)
                 return text
@@ -294,13 +209,10 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
             if verbose:
                 print(f"[Tools to call: {[tc['name'] for tc in tool_calls]}]")
 
-            # Add assistant message with tool calls (required for proper conversation flow)
-            # Store the raw response message which includes tool_calls
             if response.get("choices") and response["choices"][0].get("message"):
                 assistant_message = response["choices"][0]["message"]
                 self.conversation_history.append(assistant_message)
 
-            # Process tool calls
             tool_results = []
             for tool_call in tool_calls:
                 tool_name = tool_call["name"]
@@ -310,7 +222,6 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
                 if verbose:
                     print(f"  Calling {tool_name}({json.dumps(tool_input)})...")
 
-                # Execute tool
                 result = self.call_tool(tool_name, tool_input)
 
                 if verbose:
@@ -320,8 +231,6 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
                     else:
                         print(f"    → Error: {result['error']}")
 
-                # Format tool result according to OpenAI spec
-                # Truncate large results to avoid context overflow
                 result_str = json.dumps(result)
                 if len(result_str) > 5000:
                     result_truncated = {
@@ -339,13 +248,11 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
                 }
                 tool_results.append(tool_result)
 
-            # Add all tool results to conversation
             self.conversation_history.extend(tool_results)
 
         if verbose:
             print("\n[Max iterations reached]")
 
-        # Return last assistant message or empty string
         for msg in reversed(self.conversation_history):
             if msg["role"] == "assistant":
                 return msg["content"]
@@ -353,85 +260,99 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
         return ""
 
     async def run_async(self, user_question: str, verbose: bool = False) -> str:
-        """Async version of run() for parallel specialist execution.
-
-        Args:
-            user_question: The question to answer
-            verbose: Print intermediate steps
-
-        Returns:
-            Final response from the agent
-        """
-        # Run the synchronous version in a thread pool to avoid blocking
+        """Async version of run() for parallel specialist execution."""
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, self.run, user_question, verbose)
 
-    def get_critic_prompt(self) -> str:
-        """Get the system prompt for the scientific critic.
+    def get_critic_prompt_with_red_flags(self) -> str:
+        """Get the system prompt for the scientific critic with Red Flag system.
 
         Returns:
-            Critic system prompt string
+            Critic system prompt string with Red Flag checklist requirement
         """
-        return """You are a Scientific Critic specializing in biomedical research evaluation. Your role is to rigorously review scientific answers for accuracy, completeness, and methodological soundness.
+        return """You are a Scientific Critic specializing in biomedical research evaluation with a focus on CRITICAL FLAW DETECTION.
 
-## Evaluation Criteria
+## Your Mission
+Generate a "Red Flag Checklist" - a structured list of specific, actionable flaws that MUST be addressed before the research can be considered complete.
 
-1. **Scientific Rigor**:
-   - Are claims supported by evidence?
-   - Are appropriate statistical methods used?
-   - Are limitations acknowledged?
-   - Is the reasoning logically sound?
+## Red Flag Categories
 
-2. **Completeness**:
-   - Does the answer address all parts of the question?
-   - Are key details missing?
-   - Should additional analyses be performed?
+1. **Data Analysis Flaws**:
+   - Incorrect statistical methods
+   - Missing validation steps
+   - Computational errors
+   - Inappropriate data transformations
+   - Failure to check assumptions
 
-3. **Data Analysis Quality**:
-   - Are the data analyses appropriate?
-   - Are results interpreted correctly?
-   - Are there computational errors?
+2. **Missing Critical Steps**:
+   - Required analyses not performed
+   - Essential controls missing
+   - Key data files not examined
+   - Important databases not queried
 
-4. **Literature Support**:
-   - Are claims consistent with the literature?
-   - Are ALL papers cited with BOTH title and PMID in format: "Title" (PMID: 12345678)?
-   - Should additional papers be cited?
-   - Are there contradictory findings that should be discussed?
+3. **Unsupported Claims**:
+   - Statements without evidence
+   - Citations without actual paper verification
+   - Speculation presented as fact
+   - Over-interpretation of results
 
-5. **Practical Feasibility**:
-   - Are proposed strategies realistic?
-   - Are technical challenges acknowledged?
-   - Are resource requirements reasonable?
+4. **Logical Errors**:
+   - Contradictory statements
+   - Flawed reasoning chains
+   - Circular arguments
+   - Incorrect causal inferences
 
-## Your Task
+5. **Literature Gaps**:
+   - Missing relevant papers
+   - Failure to cite contradictory evidence
+   - Outdated references
+   - Misrepresentation of cited work
 
-Review the provided answer and provide constructive feedback. Focus on:
-- **Strengths**: What is done well
-- **Issues**: Errors, gaps, or weaknesses
-- **Improvements**: Specific suggestions to enhance the answer
+## Output Format
 
-Be direct but constructive. Prioritize accuracy and completeness over minor stylistic issues.
-Do NOT provide a rewritten answer - only critique and suggestions.
+You MUST output a structured Red Flag Checklist:
 
-If the answer is of high quality and scientifically sound, you may approve it with minor suggestions."""
+**RED FLAG CHECKLIST:**
+
+[CRITICAL - Data Analysis]
+- Flag ID: DA-1
+- Issue: [Specific flaw]
+- Location: [Where in the analysis]
+- Required Fix: [What must be done]
+
+[CRITICAL - Missing Step]
+- Flag ID: MS-1
+- Issue: [What's missing]
+- Impact: [Why this matters]
+- Required Fix: [Specific action needed]
+
+[MODERATE - Unsupported Claim]
+- Flag ID: UC-1
+- Claim: [Exact statement]
+- Problem: [Why unsupported]
+- Required Fix: [Evidence needed]
+
+## Severity Levels
+- CRITICAL: Must fix before proceeding (blocks completion)
+- MODERATE: Should fix for rigor (affects quality)
+- MINOR: Nice to improve (polish)
+
+## Important Rules
+1. Be SPECIFIC - cite exact statements, line numbers, or analysis steps
+2. Be ACTIONABLE - each flag must have a clear "Required Fix"
+3. NO solutions - only identify problems
+4. Prioritize CRITICAL flags (max 3-5)
+5. If analysis is sound, you may have zero CRITICAL flags
+
+Your checklist will be used to enforce quality - the PI MUST address every CRITICAL flag."""
 
     def run_with_critic(self, user_question: str, verbose: bool = False, max_refinement_rounds: int = 1) -> tuple[str, str, str]:
-        """Run the agent with critic feedback loop.
-
-        Args:
-            user_question: The question to answer
-            verbose: Print intermediate steps
-            max_refinement_rounds: Maximum number of refinement iterations (default: 1)
-
-        Returns:
-            Tuple of (initial_answer, critique, final_answer)
-        """
+        """Run the agent with critic feedback loop (legacy - kept for compatibility)."""
         if verbose:
             print(f"\n{'='*60}")
             print(f"RUNNING WITH CRITIC FEEDBACK")
             print(f"{'='*60}\n")
 
-        # Step 1: Get initial answer from main agent
         if verbose:
             print("[STEP 1: Main Agent Analysis]")
         initial_answer = self.run(user_question, verbose=verbose)
@@ -439,20 +360,17 @@ If the answer is of high quality and scientifically sound, you may approve it wi
         if not initial_answer:
             return "", "No answer produced by agent", ""
 
-        # Step 2: Get critic feedback
         if verbose:
             print(f"\n{'='*60}")
             print("[STEP 2: Scientific Critic Review]")
             print(f"{'='*60}\n")
 
-        # Create a new agent instance for the critic with the same config
         critic_agent = BioinformaticsAgent(
-            api_key=None,  # Reuse existing credentials
+            api_key=None,
             model=self.client.model if hasattr(self.client, 'model') else "claude-sonnet-4-20250514",
             provider="anthropic" if isinstance(self.client, AnthropicClient) else "openrouter"
         )
 
-        # Build critic prompt
         critic_question = f"""Please review the following scientific answer for rigor, completeness, and accuracy.
 
 ORIGINAL QUESTION:
@@ -468,23 +386,21 @@ Provide a structured critique with:
 
 If the answer is high quality and scientifically sound, you may approve it."""
 
-        # Override the critic's system prompt
         original_get_system_prompt = critic_agent.get_system_prompt
-        critic_agent.get_system_prompt = self.get_critic_prompt
+        critic_agent.get_system_prompt = self.get_critic_prompt_with_red_flags
 
-        # Run critic (without tools, just reasoning)
         critique = ""
         critic_messages = [{"role": "user", "content": critic_question}]
 
         call_params = {
             "messages": critic_messages,
-            "tools": [],  # Critic doesn't use tools
-            "temperature": 0.3,  # Lower temperature for consistent evaluation
+            "tools": [],
+            "temperature": 0.3,
             "max_tokens": get_max_tokens_for_model(self.client.model),
         }
 
         if isinstance(self.client, AnthropicClient):
-            call_params["system"] = self.get_critic_prompt()
+            call_params["system"] = self.get_critic_prompt_with_red_flags()
 
         response = self.client.create_message(**call_params)
         critique = self.client.get_response_text(response)
@@ -492,14 +408,11 @@ If the answer is high quality and scientifically sound, you may approve it."""
         if verbose:
             print(f"Critic Feedback:\n{critique}\n")
 
-        # Restore original system prompt
         critic_agent.get_system_prompt = original_get_system_prompt
 
-        # Step 3: Check if refinement needed
-        # Simple heuristic: if critique mentions serious issues, refine
         needs_refinement = any(keyword in critique.lower() for keyword in [
             "error", "incorrect", "missing", "should", "needs", "improve",
-            "gap", "weakness", "concern", "problem"
+            "gap", "weakness", "concern", "problem", "critical", "red flag"
         ])
 
         if not needs_refinement or max_refinement_rounds == 0:
@@ -507,7 +420,6 @@ If the answer is high quality and scientifically sound, you may approve it."""
                 print("[STEP 3: No refinement needed - answer approved]\n")
             return initial_answer, critique, initial_answer
 
-        # Step 4: Refine answer based on critique
         if verbose:
             print(f"\n{'='*60}")
             print("[STEP 3: Refining Answer Based on Feedback]")
@@ -526,7 +438,6 @@ CRITIC FEEDBACK:
 
 Please provide an improved answer that addresses the critique's suggestions. Focus on fixing errors, filling gaps, and adding missing analyses."""
 
-        # Clear conversation history and run refinement
         final_answer = self.run(refinement_question, verbose=verbose)
 
         if verbose:
@@ -538,23 +449,10 @@ Please provide an improved answer that addresses the critique's suggestions. Foc
 
 
 def create_agent(api_key: Optional[str] = None, model: Optional[str] = None, provider: Optional[str] = None, data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data", input_dir: Optional[str] = None) -> BioinformaticsAgent:
-    """Factory function to create an agent.
-
-    Args:
-        api_key: API key (Anthropic or OpenRouter)
-        model: Model identifier (defaults based on provider)
-        provider: 'anthropic' or 'openrouter' (defaults to API_PROVIDER env var)
-        data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
-        input_dir: Path to question-specific input data (defaults to data_dir)
-
-    Returns:
-        BioinformaticsAgent instance
-    """
-    # Get provider from env if not specified
+    """Factory function to create an agent."""
     if provider is None:
         provider = os.getenv("API_PROVIDER", "anthropic")
 
-    # Set default models based on provider
     if model is None:
         if provider == "anthropic":
             model = "claude-sonnet-4-20250514"
@@ -565,12 +463,7 @@ def create_agent(api_key: Optional[str] = None, model: Optional[str] = None, pro
 
 
 class ScientificAgent(BioinformaticsAgent):
-    """A persona-based agent for Virtual Lab architecture.
-
-    Extends BioinformaticsAgent with dynamic role-playing capabilities,
-    allowing the agent to take on specific scientific roles (e.g., PI,
-    Immunologist, Computational Biologist, Critic) in a team meeting setting.
-    """
+    """A persona-based agent with data-driven reasoning for subtask collaboration."""
 
     def __init__(
         self,
@@ -581,48 +474,60 @@ class ScientificAgent(BioinformaticsAgent):
         data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
         input_dir: Optional[str] = None
     ):
-        """Initialize a scientific agent with a specific persona.
-
-        Args:
-            persona: AgentPersona defining the agent's role, expertise, and goals
-            api_key: API key (Anthropic or OpenRouter)
-            model: Model to use
-            provider: 'anthropic' or 'openrouter'
-            data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
-            input_dir: Path to question-specific input data (defaults to data_dir)
-        """
         super().__init__(api_key, model, provider, data_dir, input_dir)
         self.persona = persona
 
     def get_system_prompt(self) -> str:
-        """Get dynamic system prompt based on the agent's persona.
-
-        Returns:
-            System prompt string tailored to this agent's role
-        """
+        """Get data-driven system prompt for subtask-centric collaboration."""
         return f"""You are {self.persona.title}.
 
 **Expertise:** {self.persona.expertise}
 **Goal:** {self.persona.goal}
 **Role:** {self.persona.role}
 
-You are participating in a Virtual Lab research meeting with other scientific experts.
-Each participant brings specialized knowledge to solve complex biomedical problems.
+You are participating in a SUBTASK-CENTRIC Virtual Lab where specialists work SEQUENTIALLY on specific subtasks.
 
-## Your Responsibilities
-- Apply your specific expertise to analyze the problem from your unique perspective
-- Use available tools (Python, PubMed search, database queries) when needed for your analysis
-- Contribute concise, scientifically rigorous insights
-- Build on and reference other team members' contributions when relevant
-- Acknowledge limitations outside your expertise area
-- Be precise and avoid speculation beyond your domain
+## CRITICAL: Data-Driven Reasoning
+
+**MANDATORY RULE:**
+If a previous specialist generated files, executed code, or produced analysis results, you MUST:
+1. EXPLICITLY reference their output (e.g., "Based on the DEG analysis from Computational Biologist...")
+2. READ and ANALYZE the actual data they generated (use read_file, execute_python to examine their outputs)
+3. BUILD upon their findings - do not repeat their work
+4. VALIDATE their results if appropriate for your expertise
+
+**Example Good Behavior:**
+Previous specialist: "I created differential_expression.csv with 500 DEGs"
+You:
+- read_file("differential_expression.csv") to examine the data
+- "Based on the DEG list, I analyzed the top 50 genes and found..."
+
+**Example Bad Behavior:**
+Previous specialist: "I created differential_expression.csv"
+You: "I think we should do differential expression analysis..." ← WRONG! Data already exists!
+
+## Your Responsibilities in Sequential Workflow
+
+1. **Context Awareness**: Read the subtask description and review outputs from previous subtasks
+2. **Tool Usage**: Use tools to VERIFY and BUILD UPON previous findings
+3. **Explicit References**: Cite what previous specialists found (with file names, statistics, etc.)
+4. **Contribute Uniquely**: Apply YOUR expertise - don't duplicate previous analyses
+5. **Generate Outputs**: Create files, figures, or results for downstream specialists
+6. **Be Concise**: Focus on YOUR subtask - don't try to solve everything
 
 ## Communication Style
-- Be direct and scientific in your communication
-- Structure your contributions clearly
-- Use appropriate technical terminology for your field
-- Cite evidence and data when making claims
-- Propose actionable next steps when appropriate
+- Start by acknowledging previous work if applicable
+- Be specific about what you're analyzing
+- Reference exact files, numbers, and results
+- Generate concrete outputs (files, figures, statistics)
+- Signal what downstream specialists should examine
 
-Remember: You are ONE expert on a team. Your goal is to contribute your specialized
-knowledge to the collective scientific effort, not to solve everything alone."""
+## Tools Available
+- find_files(): Discover data
+- read_file(): Read previous outputs
+- execute_python(): Analyze data, create plots
+- query_database(): Get context from databases
+- search_literature(): Find relevant papers
+- search_pubmed(): Quick literature searches
+
+Remember: You are ONE specialist in a SEQUENTIAL workflow. Build on what came before, execute YOUR subtask, and prepare outputs for what comes next."""

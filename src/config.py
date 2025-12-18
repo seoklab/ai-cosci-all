@@ -39,6 +39,7 @@ class DataConfig:
     paperqa_llm: str = "openrouter/google/gemini-3-pro-preview"  # Model for PaperQA (via OpenRouter) - PAID model
     paperqa_embedding: str = "st-multi-qa-MiniLM-L6-cos-v1"  # Local embedding (free, no API calls)
     paperqa_max_sources: int = 5  # Maximum contexts to retrieve
+    use_paperqa_only: bool = True  # If True, use only search_literature (paper-qa) and disable search_pubmed
 
     def __post_init__(self):
         """Validate that directories exist or can be created."""
@@ -85,7 +86,8 @@ def get_default_config() -> DataConfig:
         pubmed_api_key=os.getenv("PUBMED_API_KEY"),
         paperqa_llm=os.getenv("PAPERQA_LLM", "openrouter/google/gemini-3-pro-preview"),
         paperqa_embedding=os.getenv("PAPERQA_EMBEDDING", "st-multi-qa-MiniLM-L6-cos-v1"),
-        paperqa_max_sources=int(os.getenv("PAPERQA_MAX_SOURCES", "5"))
+        paperqa_max_sources=int(os.getenv("PAPERQA_MAX_SOURCES", "5")),
+        use_paperqa_only=os.getenv("USE_PAPERQA_ONLY", "true").lower() == "true"
     )
 
 
@@ -117,7 +119,8 @@ def create_custom_config(
         pubmed_api_key=kwargs.get("pubmed_api_key", default.pubmed_api_key),
         paperqa_llm=kwargs.get("paperqa_llm", default.paperqa_llm),
         paperqa_embedding=kwargs.get("paperqa_embedding", default.paperqa_embedding),
-        paperqa_max_sources=kwargs.get("paperqa_max_sources", default.paperqa_max_sources)
+        paperqa_max_sources=kwargs.get("paperqa_max_sources", default.paperqa_max_sources),
+        use_paperqa_only=kwargs.get("use_paperqa_only", default.use_paperqa_only)
     )
 
 
