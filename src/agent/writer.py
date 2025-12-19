@@ -36,14 +36,17 @@ class OpenRouterPaperSolver:
         }
 
 
-    def _create_system_prompt(self) -> str:
+    def _create_system_prompt(self, use_sentence_level_citations: bool = True) -> str:
         """
         Create a comprehensive system prompt for academic paper writing.
+        
+        Args:
+            use_sentence_level_citations (bool): Whether to use sentence-level citation approach
         
         Returns:
             str: Detailed system prompt for the LLM
         """
-        return """You are a senior academic researcher writing a high-quality scientific paper. You have access to literature search tools and must use them to provide proper citations for all scientific claims.
+        base_prompt = """You are a senior academic researcher writing a high-quality scientific paper. You must provide proper citations for all scientific claims.
 
 CRITICAL REQUIREMENTS:
 
@@ -56,13 +59,27 @@ CRITICAL REQUIREMENTS:
    - Conclusion (summary and future directions)
    - References (MANDATORY - numbered list of all citations)
 
-2. CITATION REQUIREMENTS - EXTREMELY IMPORTANT:
+2. CITATION REQUIREMENTS - EXTREMELY IMPORTANT:"""
+
+        if use_sentence_level_citations:
+            citation_instructions = """
+   - Use the provided literature search results to insert specific citations
+   - Each scientific claim should be supported by relevant citations from the search results
+   - Use numbered citations in square brackets: [1], [2], etc.
+   - Match citations to the most relevant sentences based on the sentence-level search results provided
+   - NEVER make up citations or reference numbers
+   - If no relevant citation is found in the provided results, write the sentence without citation but use cautious language
+   - The References section is MANDATORY and must contain all cited papers from the search results"""
+        else:
+            citation_instructions = """
    - For every scientific claim in the Introduction and Discussion, you MUST search for and cite real academic papers
    - Use the search_pubmed, search_biorxiv, or search_arxiv tools to find relevant papers
    - Use numbered citations in square brackets: [1], [2], etc.
    - NEVER make up citations or reference numbers
    - If you cannot find a citation, omit the claim rather than fabricate
-   - The References section is MANDATORY and must contain all cited papers
+   - The References section is MANDATORY and must contain all cited papers"""
+
+        rest_of_prompt = """
 
 3. METHODS SECTION RULES:
    - ONLY describe the data analysis methods that the scientists actually performed
@@ -70,34 +87,25 @@ CRITICAL REQUIREMENTS:
    - Focus on computational analysis, statistical methods, and data processing ONLY
    - Base everything on what is explicitly mentioned in the scientist findings
 
-4. LITERATURE SEARCH PROTOCOL:
-   - Before writing Introduction, search for 3-5 key papers on the topic
-   - Before writing Discussion, search for recent relevant papers
-   - Use specific, targeted search terms related to the research question
-   - Prioritize recent papers (last 5-10 years) when possible
-
-5. FIGURE INTEGRATION:
+4. FIGURE INTEGRATION:
    - Insert up to 10 figure suggestions using: [Figure X: Detailed description...]
    - Base figures ONLY on data/results mentioned in scientist findings
    - Do NOT suggest figures for experiments not performed
 
-6. CONTENT ACCURACY:
+5. CONTENT ACCURACY:
    - Base paper EXCLUSIVELY on provided scientist findings
    - Use specific numbers, statistics, and results from findings
    - Do NOT add speculative or general knowledge not supported by findings
    - Maintain strict scientific rigor and evidence-based writing
 
-7. FORMATTING:
+6. FORMATTING:
    - Use proper Markdown formatting with clear section headers
    - Number citations consecutively [1], [2], [3]...
    - Format References section as: [1] Author(s). Title. Journal. Year; Volume: Pages.
 
-SEARCH TOOL USAGE:
-- Use search_pubmed("query terms") for biomedical papers
-- Use search_literature("query terms") for broader academic literature
-- Search before writing Introduction and Discussion sections
+Remember: Every scientific claim should be evidence-based and properly cited when literature support is available."""
 
-Remember: Every scientific claim needs a citation. Use the search tools actively to find real papers to support your statements."""
+        return base_prompt + citation_instructions + rest_of_prompt
 
     def _create_user_prompt(self, research_question: str, scientist_findings: str, target_word_count: int) -> str:
         """
@@ -131,6 +139,140 @@ Please generate a full academic paper that:
 
 Begin writing the paper now, ensuring it meets all the specified requirements."""
 
+    def _extract_key_terms_from_sentence(self, sentence: str) -> list:
+        """
+        Use LLM to extract key terms from a sentence for literature search.
+        
+        Args:
+            sentence (str): The sentence to analyze
+            
+        Returns:
+            list: List of key terms extracted from the sentence
+        """
+        if not sentence.strip() or len(sentence.split()) < 5:
+            return []
+        
+        extraction_prompt = f"""Extract 2-4 key scientific terms from this sentence that would be useful for literature search. Focus on specific concepts, methods, or biological processes mentioned.
+
+Sentence: "{sentence}"
+
+Return only the key terms, separated by commas. Do not include general words like "analysis", "study", "research". Focus on specific scientific concepts.
+
+Examples:
+- For "T-cell populations showed increased cytokine production" -> "T-cell populations, cytokine production"
+- For "mRNA stability was analyzed using nanopore sequencing" -> "mRNA stability, nanopore sequencing"
+
+Key terms:"""
+
+        try:
+            messages = [{"role": "user", "content": extraction_prompt}]
+            response = self.client.create_message(
+                messages=messages,
+                temperature=0.1,
+                max_tokens=100
+            )
+            
+            terms_text = self.client.get_response_text(response).strip()
+            key_terms = [term.strip() for term in terms_text.split(",") if term.strip()]
+            return key_terms[:3]  # Limit to top 3 terms
+            
+        except Exception as e:
+            print(f"   Failed to extract key terms from sentence: {e}")
+            return []
+
+    def _search_for_sentence_citations(self, sentence: str, key_terms: list) -> list:
+        """
+        Search for citations relevant to a specific sentence.
+        
+        Args:
+            sentence (str): The sentence needing citations
+            key_terms (list): Key terms extracted from the sentence
+            
+        Returns:
+            list: List of search results for potential citations
+        """
+        citations = []
+        
+        for term in key_terms:
+            try:
+                # Search PubMed first
+                pubmed_result = self.tools["search_pubmed"](term)
+                if pubmed_result and pubmed_result.success and pubmed_result.output:
+                    citations.append({
+                        'term': term,
+                        'source': 'pubmed',
+                        'result': pubmed_result.output
+                    })
+                
+                # Search broader literature
+                lit_result = self.tools["search_literature"](term)
+                if lit_result and lit_result.success and lit_result.output:
+                    citations.append({
+                        'term': term,
+                        'source': 'literature',
+                        'result': lit_result.output
+                    })
+                    
+            except Exception as e:
+                print(f"   Citation search failed for '{term}': {e}")
+                continue
+        
+        return citations
+
+    def _conduct_sentence_level_literature_search(self, draft_content: str) -> str:
+        """
+        Perform sentence-level literature searches and return enhanced content with citations.
+        
+        Args:
+            draft_content (str): Initial draft content of the paper
+            
+        Returns:
+            str: Content enhanced with sentence-level citations
+        """
+        print("🔍 Conducting sentence-level literature searches...")
+        
+        # Split content into sentences (simple approach)
+        sentences = re.split(r'[.!?]+', draft_content)
+        sentences = [s.strip() for s in sentences if s.strip() and len(s.split()) > 5]
+        
+        all_citations = {}
+        citation_counter = 1
+        
+        # Process sentences that likely need citations (from Introduction and Discussion)
+        for i, sentence in enumerate(sentences):
+            # Skip sentences that are headers, figure captions, or already have citations
+            if (any(header in sentence.lower() for header in ['abstract', 'introduction', 'methods', 'results', 'discussion', 'conclusion', 'references']) or
+                sentence.startswith('[Figure') or
+                '[' in sentence and ']' in sentence):
+                continue
+            
+            # Extract key terms using LLM
+            key_terms = self._extract_key_terms_from_sentence(sentence)
+            
+            if key_terms:
+                print(f"   Processing sentence {i+1}: {key_terms}")
+                citations = self._search_for_sentence_citations(sentence, key_terms)
+                
+                if citations:
+                    # Store citations for this sentence
+                    sentence_key = sentence[:50] + "..." if len(sentence) > 50 else sentence
+                    all_citations[sentence_key] = {
+                        'citations': citations,
+                        'citation_numbers': list(range(citation_counter, citation_counter + len(citations)))
+                    }
+                    citation_counter += len(citations)
+        
+        # Format all citations for return
+        citation_summary = "SENTENCE-LEVEL CITATION RESULTS:\n\n"
+        for sentence_key, data in all_citations.items():
+            citation_summary += f"Sentence: {sentence_key}\n"
+            for i, citation in enumerate(data['citations']):
+                citation_num = data['citation_numbers'][i]
+                citation_summary += f"  [{citation_num}] From {citation['source']} ({citation['term']}): {citation['result'][:200]}...\n"
+            citation_summary += "\n"
+        
+        return citation_summary if all_citations else "No sentence-level citations found."
+
     def _conduct_literature_search(self, research_question: str, scientist_findings: str) -> str:
         """
         Conduct literature searches to gather citations for the paper.
@@ -144,20 +286,22 @@ Begin writing the paper now, ensuring it meets all the specified requirements.""
         """
         search_results = []
         
-        # Extract key terms from research question and findings
-        key_terms = []
+        # Use LLM to extract key terms from research question and findings
+        combined_text = f"{research_question} {scientist_findings}"
+        key_terms = self._extract_key_terms_from_sentence(combined_text)
         
-        # Add terms based on content analysis
-        if "mRNA" in research_question or "mRNA" in scientist_findings:
-            key_terms.extend(["mRNA stability", "mRNA decay", "poly(A) tail"])
-        if "virus" in research_question or "viral" in scientist_findings:
-            key_terms.extend(["viral RNA", "RNA virus"])
-        if "CRE" in scientist_findings or "cis-regulatory" in research_question:
-            key_terms.extend(["cis-regulatory element", "RNA regulation"])
-        if "nanopore" in research_question or "nanopore" in scientist_findings:
-            key_terms.extend(["nanopore sequencing", "direct RNA sequencing"])
-        if "poly(A)" in research_question or "poly(A)" in scientist_findings:
-            key_terms.extend(["polyadenylation", "deadenylation"])
+        # If LLM extraction fails, fall back to rule-based approach
+        if not key_terms:
+            if "mRNA" in research_question or "mRNA" in scientist_findings:
+                key_terms.extend(["mRNA stability", "mRNA decay", "poly(A) tail"])
+            if "virus" in research_question or "viral" in scientist_findings:
+                key_terms.extend(["viral RNA", "RNA virus"])
+            if "CRE" in scientist_findings or "cis-regulatory" in research_question:
+                key_terms.extend(["cis-regulatory element", "RNA regulation"])
+            if "nanopore" in research_question or "nanopore" in scientist_findings:
+                key_terms.extend(["nanopore sequencing", "direct RNA sequencing"])
+            if "poly(A)" in research_question or "poly(A)" in scientist_findings:
+                key_terms.extend(["polyadenylation", "deadenylation"])
         
         # Conduct searches with different tools
         search_queries = key_terms[:3]  # Limit to 3 most relevant terms
@@ -230,7 +374,8 @@ Begin writing the paper now, ensuring rigorous academic standards with proper ci
         target_word_count: int = 3000,
         max_retries: int = 3,
         retry_delay: float = 2.0,
-        temperature: float = 0.2
+        temperature: float = 0.2,
+        use_sentence_level_citations: bool = True
     ) -> str:
         """
         Generate a complete academic paper based on research question and findings.
@@ -238,10 +383,11 @@ Begin writing the paper now, ensuring rigorous academic standards with proper ci
         Args:
             research_question (str): The research question to address
             scientist_findings (str): Output from the Scientist Agent
-            target_word_count (int): Target word count for the paper (default: 4000)
+            target_word_count (int): Target word count for the paper (default: 3000)
             max_retries (int): Maximum number of API call retries (default: 3)
             retry_delay (float): Delay between retries in seconds (default: 2.0)
-            temperature (float): Sampling temperature for the model (default: 0.7)
+            temperature (float): Sampling temperature for the model (default: 0.2)
+            use_sentence_level_citations (bool): Whether to use sentence-level citation approach (default: True)
             
         Returns:
             str: Complete academic paper in Markdown format
@@ -250,14 +396,118 @@ Begin writing the paper now, ensuring rigorous academic standards with proper ci
             Exception: If API calls fail after all retries
         """
         
+        if use_sentence_level_citations:
+            return self._generate_paper_with_sentence_level_citations(
+                research_question, scientist_findings, target_word_count, 
+                max_retries, retry_delay, temperature
+            )
+        else:
+            return self._generate_paper_traditional(
+                research_question, scientist_findings, target_word_count, 
+                max_retries, retry_delay, temperature
+            )
+
+    def _generate_paper_traditional(
+        self, 
+        research_question: str, 
+        scientist_findings: str, 
+        target_word_count: int = 3000,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
+        temperature: float = 0.2
+    ) -> str:
+        """
+        Generate paper using traditional approach with bulk literature searches.
+        """
         # Conduct literature searches first
         print("🔍 Conducting literature searches for citations...")
         literature_results = self._conduct_literature_search(research_question, scientist_findings)
         
         # Prepare the prompts with literature context
-        system_prompt = self._create_system_prompt()
+        system_prompt = self._create_system_prompt(use_sentence_level_citations=False)
         user_prompt = self._create_enhanced_user_prompt(research_question, scientist_findings, target_word_count, literature_results)
         
+        return self._make_api_call_with_retries(system_prompt, user_prompt, target_word_count, max_retries, retry_delay, temperature)
+
+    def _generate_paper_with_sentence_level_citations(
+        self, 
+        research_question: str, 
+        scientist_findings: str, 
+        target_word_count: int = 3000,
+        max_retries: int = 3,
+        retry_delay: float = 2.0,
+        temperature: float = 0.2
+    ) -> str:
+        """
+        Generate paper using sentence-level citation approach.
+        """
+        # Step 1: Generate initial draft without detailed citations
+        print("📝 Generating initial draft...")
+        system_prompt_draft = self._create_system_prompt(use_sentence_level_citations=False)
+        user_prompt_draft = f"""Please write a complete academic paper based on the following information:
+
+RESEARCH QUESTION:
+{research_question}
+
+SCIENTIST FINDINGS:
+{scientist_findings}
+
+TARGET WORD COUNT: Approximately {target_word_count} words
+
+Write a complete paper with all required sections, but focus on structure and content. Citations will be added in a refinement step."""
+
+        draft_paper = self._make_api_call_with_retries(
+            system_prompt_draft, user_prompt_draft, target_word_count, 
+            max_retries, retry_delay, temperature
+        )
+        
+        # Step 2: Conduct sentence-level literature searches
+        sentence_level_citations = self._conduct_sentence_level_literature_search(draft_paper)
+        
+        # Step 3: Generate final paper with sentence-level citations
+        print("✨ Enhancing paper with sentence-level citations...")
+        system_prompt_final = self._create_system_prompt(use_sentence_level_citations=True)
+        user_prompt_final = f"""Please enhance the following draft paper with proper citations based on the sentence-level literature search results provided:
+
+RESEARCH QUESTION:
+{research_question}
+
+SCIENTIST FINDINGS:
+{scientist_findings}
+
+DRAFT PAPER:
+{draft_paper}
+
+{sentence_level_citations}
+
+INSTRUCTIONS:
+1. Keep the same structure and content from the draft
+2. Add numbered citations [1], [2], [3] to sentences based on the search results
+3. Create a complete References section with all cited papers
+4. Ensure citations are relevant to the specific sentences
+5. Maintain the same word count and scientific rigor
+
+Generate the final paper with integrated citations:"""
+
+        final_paper = self._make_api_call_with_retries(
+            system_prompt_final, user_prompt_final, target_word_count, 
+            max_retries, retry_delay, temperature
+        )
+        
+        return final_paper
+
+    def _make_api_call_with_retries(
+        self, 
+        system_prompt: str, 
+        user_prompt: str, 
+        target_word_count: int,
+        max_retries: int,
+        retry_delay: float,
+        temperature: float
+    ) -> str:
+        """
+        Make API call with retry logic.
+        """
         # Prepare messages for the API call
         messages = [
             {"role": "system", "content": system_prompt},
@@ -267,7 +517,6 @@ Begin writing the paper now, ensuring rigorous academic standards with proper ci
         # Attempt API call with retries
         for attempt in range(max_retries):
             try:
-                
                 response = self.client.create_message(
                     messages=messages,
                     temperature=temperature,
@@ -376,7 +625,8 @@ Begin writing the paper now, ensuring rigorous academic standards with proper ci
         scientist_findings: str, 
         target_word_count: int = 4000,
         save_to_file: bool = True,
-        output_filename: str = "generated_paper.md"
+        output_filename: str = "generated_paper.md",
+        use_sentence_level_citations: bool = True
     ) -> tuple[str, dict]:
         """
         Generate a paper and validate its structure in one call.
@@ -387,6 +637,7 @@ Begin writing the paper now, ensuring rigorous academic standards with proper ci
             target_word_count (int): Target word count for the paper
             save_to_file (bool): Whether to save the paper to a file
             output_filename (str): Filename for saving the paper
+            use_sentence_level_citations (bool): Whether to use sentence-level citation approach
             
         Returns:
             tuple: (paper_content, validation_results)
@@ -395,7 +646,8 @@ Begin writing the paper now, ensuring rigorous academic standards with proper ci
         paper_content = self.generate_paper(
             research_question=research_question,
             scientist_findings=scientist_findings,
-            target_word_count=target_word_count
+            target_word_count=target_word_count,
+            use_sentence_level_citations=use_sentence_level_citations
         )
         
         # Validate the structure
@@ -434,24 +686,72 @@ def test_openrouter_paper_solver():
         # Initialize the paper solver
         solver = OpenRouterPaperSolver(model="anthropic/claude-3.5-sonnet")
         
-        # Generate and validate the paper
+        print("🧪 Testing sentence-level citation approach...")
+        
+        # Generate and validate the paper with sentence-level citations
         paper, validation = solver.generate_and_validate_paper(
             research_question=research_question,
             scientist_findings=scientist_findings,
             target_word_count=3500,
             save_to_file=True,
-            output_filename="example_tcell_paper.md"
+            output_filename="example_tcell_paper_sentence_level.md",
+            use_sentence_level_citations=True
         )
         
-        print("Paper generation completed successfully!")
-        print(f"Paper length: {len(paper)} characters")
-        print(f"Structure validation: {validation}")
+        print("✅ Paper generation completed successfully!")
+        print(f"📊 Paper length: {len(paper)} characters")
+        print(f"📋 Word count: {len(paper.split())} words")
+        print(f"🔍 Structure validation: {validation}")
+        
+        # Also test traditional approach for comparison
+        print("\n🧪 Testing traditional citation approach for comparison...")
+        
+        paper_traditional, validation_traditional = solver.generate_and_validate_paper(
+            research_question=research_question,
+            scientist_findings=scientist_findings,
+            target_word_count=3500,
+            save_to_file=True,
+            output_filename="example_tcell_paper_traditional.md",
+            use_sentence_level_citations=False
+        )
+        
+        print("✅ Traditional paper generation completed!")
+        print(f"📊 Traditional paper length: {len(paper_traditional)} characters")
+        print(f"📋 Traditional word count: {len(paper_traditional.split())} words")
+        print(f"🔍 Traditional structure validation: {validation_traditional}")
         
         return paper, validation
         
     except Exception as e:
-        print(f"Error during testing: {str(e)}")
+        print(f"❌ Error during testing: {str(e)}")
         return None, None
+
+def test_sentence_level_citations():
+    """
+    Specific test for sentence-level citation functionality.
+    """
+    print("🧪 Testing sentence-level citation extraction...")
+    
+    solver = OpenRouterPaperSolver(model="anthropic/claude-3.5-sonnet")
+    
+    # Test sentence
+    test_sentence = "CD4+ T-cell populations showed increased cytokine production and enhanced activation markers."
+    
+    # Extract key terms
+    key_terms = solver._extract_key_terms_from_sentence(test_sentence)
+    print(f"📝 Test sentence: {test_sentence}")
+    print(f"🔑 Extracted key terms: {key_terms}")
+    
+    # Search for citations
+    if key_terms:
+        citations = solver._search_for_sentence_citations(test_sentence, key_terms)
+        print(f"📚 Found {len(citations)} potential citations")
+        
+        for i, citation in enumerate(citations[:2]):  # Show first 2
+            print(f"   Citation {i+1}: {citation['term']} from {citation['source']}")
+            print(f"   Preview: {citation['result'][:100]}...")
+    
+    return key_terms, citations if key_terms else []
 
 
 if __name__ == "__main__":
