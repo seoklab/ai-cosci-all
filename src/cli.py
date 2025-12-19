@@ -13,6 +13,7 @@ load_dotenv()
 
 from src.agent.agent import create_agent
 from src.agent.meeting import run_virtual_lab
+from src.agent.meeting_refactored import run_virtual_lab as run_virtual_lab_subtask
 from src.virtuallab_workflow.workflow import run_consensus_workflow, run_research_workflow
 
 
@@ -141,6 +142,12 @@ Examples:
         "-vl",
         action="store_true",
         help="Enable Virtual Lab mode (multi-agent collaboration)",
+    )
+    parser.add_argument(
+        "--subtask-centric",
+        "-sc",
+        action="store_true",
+        help="Enable Subtask-Centric Virtual Lab mode (sequential, research plan-driven)",
     )
     parser.add_argument(
         "--combined",
@@ -278,8 +285,43 @@ Examples:
             output_file = save_answer_to_file(final_answer, args.question, args.output, mode="langgraph")
             print(f"\n✓ Answer saved to: {output_file}")
 
+        elif args.subtask_centric:
+            # Subtask-Centric Virtual Lab mode - sequential research plan-driven collaboration
+            print("\n" + "=" * 60)
+            print("SUBTASK-CENTRIC VIRTUAL LAB MODE")
+            print("=" * 60)
+            print(f"Question: {args.question}")
+            print(f"Configuration: {args.rounds} rounds, max {args.team_size} specialists")
+            print("=" * 60)
+
+            # Create run-specific output directory
+            output_mgr = get_output_manager()
+            run_dir = output_mgr.create_run_directory(args.question, mode="subtask-centric")
+            print(f"Output directory: {run_dir}\n")
+
+            final_answer = run_virtual_lab_subtask(
+                question=args.question,
+                api_key=args.api_key,
+                model=args.model,
+                provider=provider,
+                num_rounds=args.rounds,
+                max_team_size=args.team_size,
+                verbose=args.verbose,
+                data_dir=args.data_dir,
+                input_dir=args.input_dir
+            )
+
+            print("\n" + "=" * 60)
+            print("FINAL ANSWER (PI Synthesis with Red Flag Resolution):")
+            print("=" * 60)
+            print(final_answer)
+
+            # Save to file
+            output_file = save_answer_to_file(final_answer, args.question, args.output, mode="subtask-centric")
+            print(f"\n✓ Answer saved to: {output_file}")
+
         elif args.virtual_lab:
-            # Virtual Lab mode - multi-agent collaboration
+            # Virtual Lab mode - multi-agent collaboration (original parallel model)
             print("\n" + "=" * 60)
             print("VIRTUAL LAB MODE")
             print("=" * 60)
@@ -341,7 +383,9 @@ Examples:
         # Interactive mode
         print("=" * 60)
         print("CoScientist: Interactive Mode")
-        if args.virtual_lab:
+        if args.subtask_centric:
+            print("(Subtask-Centric Virtual Lab - Research Plan-Driven)")
+        elif args.virtual_lab:
             print("(Virtual Lab - Multi-Agent Collaboration)")
         print("=" * 60)
         print("Ask biomedical research questions. Type 'exit' or 'quit' to exit.\n")
@@ -359,7 +403,40 @@ Examples:
             if not question:
                 continue
 
-            if args.virtual_lab:
+            if args.subtask_centric:
+                # Subtask-Centric Virtual Lab mode in interactive
+                print("\n" + "=" * 60)
+                print("SUBTASK-CENTRIC VIRTUAL LAB MEETING")
+                print("=" * 60)
+
+                # Create run-specific output directory for this question
+                output_mgr = get_output_manager()
+                run_dir = output_mgr.create_run_directory(question, mode="subtask-centric")
+                print(f"Output directory: {run_dir}\n")
+
+                final_answer = run_virtual_lab_subtask(
+                    question=question,
+                    api_key=args.api_key,
+                    model=args.model,
+                    provider=provider,
+                    num_rounds=args.rounds,
+                    max_team_size=args.team_size,
+                    verbose=args.verbose,
+                    data_dir=args.data_dir,
+                    input_dir=args.input_dir
+                )
+
+                print("\n" + "=" * 60)
+                print("FINAL ANSWER (with Red Flag Resolution):")
+                print("=" * 60)
+                print(final_answer)
+
+                # Auto-save in interactive mode
+                output_file = save_answer_to_file(final_answer, question, mode="subtask-centric")
+                print(f"✓ Saved to: {output_file}")
+                print()
+
+            elif args.virtual_lab:
                 # Virtual Lab mode in interactive
                 print("\n" + "=" * 60)
                 print("VIRTUAL LAB MEETING")
