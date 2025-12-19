@@ -15,6 +15,7 @@ from src.agent.agent import create_agent
 from src.agent.meeting import run_virtual_lab
 from src.agent.meeting_refactored import run_virtual_lab as run_virtual_lab_subtask
 from src.virtuallab_workflow.workflow import run_consensus_workflow, run_research_workflow
+from src.utils.output_manager import get_output_manager
 
 
 def save_answer_to_file(answer: str, question: str, output_path: str = None, mode: str = "single") -> str:
