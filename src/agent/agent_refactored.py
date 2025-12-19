@@ -10,11 +10,13 @@ from src.agent.anthropic_client import AnthropicClient
 from src.tools.implementations import (
     execute_python,
     search_pubmed,
-    search_literature,
     query_database,
     read_file,
     find_files,
     get_tool_definitions,
+)
+from src.tools.implementations_cached import (
+    search_literature_cached as search_literature,
 )
 
 

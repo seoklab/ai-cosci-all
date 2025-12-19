@@ -16,6 +16,7 @@ from src.agent.meeting import run_virtual_lab
 from src.agent.meeting_refactored import run_virtual_lab as run_virtual_lab_subtask
 from src.virtuallab_workflow.workflow import run_consensus_workflow, run_research_workflow
 from src.utils.output_manager import get_output_manager
+from src.utils.logger import init_logger
 
 
 def save_answer_to_file(answer: str, question: str, output_path: str = None, mode: str = "single") -> str:
@@ -287,18 +288,24 @@ Examples:
             print(f"\n✓ Answer saved to: {output_file}")
 
         elif args.subtask_centric:
+            # Initialize logger and start timer
+            logger = init_logger(verbose=args.verbose, use_colors=True)
+            logger.start_timer()
+
             # Subtask-Centric Virtual Lab mode - sequential research plan-driven collaboration
-            print("\n" + "=" * 60)
-            print("SUBTASK-CENTRIC VIRTUAL LAB MODE")
-            print("=" * 60)
-            print(f"Question: {args.question}")
-            print(f"Configuration: {args.rounds} rounds, max {args.team_size} specialists")
-            print("=" * 60)
+            logger.section("SUBTASK-CENTRIC VIRTUAL LAB MODE")
+            logger.info(f"Question: {args.question}")
+            logger.info(f"Configuration: {args.rounds} rounds, max {args.team_size} specialists")
+            logger.info(f"Model: {args.model}")
+            print()
 
             # Create run-specific output directory
             output_mgr = get_output_manager()
             run_dir = output_mgr.create_run_directory(args.question, mode="subtask-centric")
-            print(f"Output directory: {run_dir}\n")
+            logger.success(f"Output directory: {run_dir}")
+
+            logger.progress("Starting Virtual Lab session...")
+            print()
 
             final_answer = run_virtual_lab_subtask(
                 question=args.question,
@@ -312,14 +319,15 @@ Examples:
                 input_dir=args.input_dir
             )
 
-            print("\n" + "=" * 60)
-            print("FINAL ANSWER (PI Synthesis with Red Flag Resolution):")
-            print("=" * 60)
+            logger.section("FINAL ANSWER (PI Synthesis with Red Flag Resolution)")
             print(final_answer)
 
             # Save to file
             output_file = save_answer_to_file(final_answer, args.question, args.output, mode="subtask-centric")
-            print(f"\n✓ Answer saved to: {output_file}")
+            logger.success(f"Answer saved to: {output_file}")
+
+            # Print total elapsed time
+            logger.print_elapsed_time()
 
         elif args.virtual_lab:
             # Virtual Lab mode - multi-agent collaboration (original parallel model)
@@ -405,15 +413,19 @@ Examples:
                 continue
 
             if args.subtask_centric:
+                # Initialize logger for this question and start timer
+                logger = init_logger(verbose=args.verbose, use_colors=True)
+                logger.start_timer()
+
                 # Subtask-Centric Virtual Lab mode in interactive
-                print("\n" + "=" * 60)
-                print("SUBTASK-CENTRIC VIRTUAL LAB MEETING")
-                print("=" * 60)
+                logger.section("SUBTASK-CENTRIC VIRTUAL LAB MEETING")
+                logger.info(f"Question: {question}")
 
                 # Create run-specific output directory for this question
                 output_mgr = get_output_manager()
                 run_dir = output_mgr.create_run_directory(question, mode="subtask-centric")
-                print(f"Output directory: {run_dir}\n")
+                logger.success(f"Output directory: {run_dir}")
+                print()
 
                 final_answer = run_virtual_lab_subtask(
                     question=question,
@@ -427,15 +439,15 @@ Examples:
                     input_dir=args.input_dir
                 )
 
-                print("\n" + "=" * 60)
-                print("FINAL ANSWER (with Red Flag Resolution):")
-                print("=" * 60)
+                logger.section("FINAL ANSWER (with Red Flag Resolution)")
                 print(final_answer)
 
                 # Auto-save in interactive mode
                 output_file = save_answer_to_file(final_answer, question, mode="subtask-centric")
-                print(f"✓ Saved to: {output_file}")
-                print()
+                logger.success(f"Saved to: {output_file}")
+
+                # Print elapsed time for this question
+                logger.print_elapsed_time()
 
             elif args.virtual_lab:
                 # Virtual Lab mode in interactive

@@ -31,6 +31,24 @@ DIRECTORY STRUCTURE:
   │   └── ...
 """
 
+from typing import Optional
+from pathlib import Path
+import json
+import hashlib
+import time
+import sys
+import os 
+
+# Import ToolResult from implementations
+from src.tools.implementations import ToolResult
+
+# Global cache variables
+_local_paper_index = None
+_local_paper_index_dir = None
+_cached_docs = None
+_cached_docs_settings_hash = None
+_online_papers_cache = {}
+
 def search_literature_cached(
     question: str,
     mode: str = "auto",
@@ -199,9 +217,12 @@ def search_literature_cached(
             "embedding": embedding_config,
             "parsing": ParsingSettings(
                 use_doc_details=use_llm_during_parsing,
-                chunk_chars=3000,
-                overlap=100,
+                reader_config={
+                    "chunk_chars": 3000,
+                    "overlap": 100
+                },
                 multimodal=False,
+                enrichment_llm=config.paperqa_llm,
             )
         }
 

@@ -9,6 +9,7 @@ from src.agent.team_manager_refactored import (
     create_pi_persona,
     create_critic_persona,
 )
+from src.utils.logger import get_logger
 
 
 class VirtualLabMeeting:
@@ -41,13 +42,12 @@ class VirtualLabMeeting:
         self.provider = provider
         self.data_dir = data_dir
         self.input_dir = input_dir if input_dir is not None else data_dir
+        self.logger = get_logger()
 
-        if self.verbose:
-            print("\n" + "=" * 60)
-            print("INITIALIZING SUBTASK-CENTRIC VIRTUAL LAB")
-            print("=" * 60)
+        self.logger.subsection("INITIALIZING SUBTASK-CENTRIC VIRTUAL LAB")
 
         # Initialize PI
+        self.logger.progress("Creating Principal Investigator agent...")
         self.pi = ScientificAgent(
             persona=create_pi_persona(),
             api_key=api_key,
@@ -58,8 +58,7 @@ class VirtualLabMeeting:
         )
 
         # PI designs team AND research plan
-        if self.verbose:
-            print("\n[PI is designing team and research plan...]")
+        self.logger.progress("PI is designing team and research plan...")
 
         team_specs, self.research_plan = create_research_team_with_plan(
             user_question,
@@ -67,15 +66,15 @@ class VirtualLabMeeting:
             max_team_size=max_team_size
         )
 
-        if self.verbose:
-            print(f"\n[Team designed: {len(team_specs)} specialists]")
-            for spec in team_specs:
-                print(f"  - {spec['title']}")
+        self.logger.success(f"Team designed: {len(team_specs)} specialists")
+        for spec in team_specs:
+            self.logger.info(f"  • {spec['title']}", indent=2)
 
-            print(f"\n[Research plan: {len(self.research_plan)} subtasks]")
-            for subtask in self.research_plan:
-                print(f"  {subtask['subtask_id']}. {subtask['description']}")
-                print(f"     Assigned: {', '.join(subtask['assigned_specialists'])}")
+        self.logger.success(f"Research plan: {len(self.research_plan)} subtasks")
+        for subtask in self.research_plan:
+            assigned_str = ', '.join(subtask['assigned_specialists'])
+            self.logger.info(f"  {subtask['subtask_id']}. {subtask['description']}", indent=2)
+            self.logger.verbose(f"     → Assigned: {assigned_str}", indent=2)
 
         # Create specialist agents (indexed by title for lookup)
         self.specialists = {
@@ -118,27 +117,23 @@ class VirtualLabMeeting:
         expected_outputs = subtask['expected_outputs']
         dependencies = subtask.get('dependencies', [])
 
-        if self.verbose:
-            print(f"\n{'='*60}")
-            print(f"[SUBTASK {subtask_id}: {description}]")
-            print(f"Assigned: {', '.join(assigned)}")
-            print(f"Expected outputs: {', '.join(expected_outputs)}")
-            print(f"{'='*60}")
+        self.logger.subtask(subtask_id, description, assigned)
+        self.logger.verbose(f"Expected outputs: {', '.join(expected_outputs)}", indent=2)
+        if dependencies:
+            self.logger.verbose(f"Dependencies: {', '.join(dependencies)}", indent=2)
 
         # Build context from dependent subtasks
         dependency_context = self._build_dependency_context(dependencies)
 
         # If 2+ specialists assigned, run a sub-meeting
         if len(assigned) >= 2:
-            if self.verbose:
-                print(f"\n[Sub-meeting: {' & '.join(assigned)} collaborating...]")
+            self.logger.progress(f"Sub-meeting: {' & '.join(assigned)} collaborating...", indent=2)
             result = self._run_submeeting(subtask, dependency_context, assigned)
         else:
             # Single specialist execution
             specialist_title = assigned[0]
             if specialist_title not in self.specialists:
-                if self.verbose:
-                    print(f"[WARNING: Specialist '{specialist_title}' not found, skipping]")
+                self.logger.warning(f"Specialist '{specialist_title}' not found, skipping", indent=2)
                 return ""
 
             specialist = self.specialists[specialist_title]
@@ -161,14 +156,13 @@ Execute this subtask using your expertise. Remember to:
 
 Use tools as needed. Be concise but thorough."""
 
-            if self.verbose:
-                print(f"\n--- {specialist_title} working on subtask ---")
+            self.logger.agent_action(specialist_title, f"Working on subtask {subtask_id}", indent=2)
 
             result = specialist.run(subtask_prompt, verbose=self.verbose)
 
+            self.logger.verbose(f"{specialist_title} completed subtask", indent=2)
             if self.verbose:
-                preview = result[:300] + "..." if len(result) > 300 else result
-                print(f"\n{specialist_title} output:\n{preview}")
+                self.logger.result_summary(f"{specialist_title} output", result, max_lines=5)
 
             # Add to transcript
             self.meeting_transcript.append({
@@ -402,14 +396,10 @@ This is your last turn - make it count!"""
         Returns:
             Final synthesized answer from PI with red flags addressed
         """
-        if self.verbose:
-            print("\n" + "=" * 60)
-            print("STARTING SUBTASK-CENTRIC MEETING")
-            print("=" * 60)
+        self.logger.subsection("STARTING SUBTASK-CENTRIC MEETING")
 
         # Phase 1: PI opens with research plan overview
-        if self.verbose:
-            print("\n[PHASE 1: PI Research Plan Overview]")
+        self.logger.subsection("PHASE 1: PI Research Plan Overview")
 
         plan_summary = "\n".join([
             f"{st['subtask_id']}. {st['description']} (Assigned: {', '.join(st['assigned_specialists'])})"
@@ -439,19 +429,16 @@ Provide a brief opening (2-3 sentences) that:
         })
 
         # Phase 2: Execute research plan (sequential subtasks)
-        if self.verbose:
-            print("\n" + "=" * 60)
-            print("[PHASE 2: SEQUENTIAL SUBTASK EXECUTION]")
-            print("=" * 60)
+        self.logger.subsection("PHASE 2: SEQUENTIAL SUBTASK EXECUTION")
+        self.logger.info(f"Executing {len(self.research_plan)} subtasks in sequence...")
 
         for subtask in self.research_plan:
             self._execute_subtask_sequential(subtask)
 
+        self.logger.success(f"All {len(self.research_plan)} subtasks completed")
+
         # Phase 3: Critic review with Red Flag Checklist
-        if self.verbose:
-            print("\n" + "=" * 60)
-            print("[PHASE 3: CRITIC RED FLAG REVIEW]")
-            print("=" * 60)
+        self.logger.subsection("PHASE 3: CRITIC RED FLAG REVIEW")
 
         all_subtask_outputs = "\n\n".join([
             f"=== SUBTASK {st_id} ===\n{output}"
@@ -485,8 +472,7 @@ Focus on:
 
 If work is sound, output: "No critical red flags detected."""
 
-        if self.verbose:
-            print("\n--- Scientific Critic Review ---")
+        self.logger.agent_action("Scientific Critic", "Reviewing all subtask outputs for red flags", indent=2)
 
         critique = self.critic.run(critique_prompt, verbose=False)
 
@@ -554,6 +540,8 @@ Provide a comprehensive final answer with these sections:
 The "Red Flag Resolution" section is MANDATORY if there are critical flags.
 If you do not address ALL critical flags, your synthesis is INCOMPLETE."""
 
+        self.logger.agent_action("PI", "Synthesizing final answer with red flag resolution", indent=2)
+
         final_answer = self.pi.run(final_prompt, verbose=self.verbose)
 
         self.meeting_transcript.append({
@@ -570,15 +558,23 @@ If you do not address ALL critical flags, your synthesis is INCOMPLETE."""
                     1 for flag in critical_flags
                     if flag['flag_id'] in final_answer or flag['issue'][:30] in final_answer
                 )
-                if self.verbose:
-                    print(f"\n[Red Flag Resolution: {addressed_count}/{len(critical_flags)} critical flags addressed]")
+
+                if addressed_count == len(critical_flags):
+                    self.logger.success(f"Red Flag Resolution: All {len(critical_flags)} critical flags addressed", indent=2)
+                elif addressed_count > 0:
+                    self.logger.warning(f"Red Flag Resolution: {addressed_count}/{len(critical_flags)} critical flags addressed", indent=2)
+                else:
+                    self.logger.error(f"Red Flag Resolution: No critical flags addressed ({len(critical_flags)} pending)", indent=2)
 
                 if addressed_count < len(critical_flags):
                     # Add warning to final answer
                     final_answer += f"\n\n⚠️ **WARNING:** Not all critical red flags were fully addressed ({addressed_count}/{len(critical_flags)}). Further iteration may be needed."
 
         # Append references
+        self.logger.progress("Appending references section...", indent=2)
         final_answer_with_refs = self._append_references_section(final_answer)
+
+        self.logger.success("Virtual Lab meeting completed")
 
         return final_answer_with_refs
 

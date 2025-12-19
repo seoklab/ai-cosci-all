@@ -2,9 +2,9 @@ from typing import Optional
 from src.agent.openrouter_client import OpenRouterClient
 from src.agent.anthropic_client import AnthropicClient
 from src.config import get_global_config
-from src.tools.implementations import (
-    search_literature,
-    search_pubmed,
+from src.tools.implementations import search_pubmed
+from src.tools.implementations_cached import (
+    search_literature_cached as search_literature,
 )
 
 import re
