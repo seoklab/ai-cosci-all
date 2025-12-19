@@ -3,4 +3,4 @@
 *.env
 *.pyc
 NEXT_SESSION.md
-
+*__pycache__/
