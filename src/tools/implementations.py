@@ -178,7 +178,7 @@ def search_pubmed(query: str, max_results: int = 10, retmax: int = 100) -> ToolR
         retmax: Maximum results to fetch from NCBI
 
     Returns:
-        ToolResult with list of articles
+        ToolResult with list of articles containing (title, author, journal, publish_year, doi)
     """
     import xml.etree.ElementTree as ET
     
@@ -229,19 +229,15 @@ def search_pubmed(query: str, max_results: int = 10, retmax: int = 100) -> ToolR
             title_elem = article.find(".//ArticleTitle")
             title = title_elem.text if title_elem is not None else "N/A"
             
-            # Extract abstract (combine all AbstractText elements)
-            abstract_parts = []
-            for abstract_text in article.findall(".//AbstractText"):
-                # Check for labeled sections (e.g., BACKGROUND, METHODS)
-                label = abstract_text.get("Label", "")
-                text = abstract_text.text or ""
-                if label:
-                    abstract_parts.append(f"{label}: {text}")
-                else:
-                    abstract_parts.append(text)
-            abstract = " ".join(abstract_parts) if abstract_parts else "N/A"
+            # Extract journal information
+            journal = "N/A"
+            journal_elem = article.find(".//Journal/Title")
+            if journal_elem is None:
+                journal_elem = article.find(".//Journal/ISOAbbreviation")
+            if journal_elem is not None:
+                journal = journal_elem.text
             
-            # Extract authors (first 3)
+            # Extract authors (format: "Author1, Author2, Author3 et al." if more than 3)
             authors = []
             for author in article.findall(".//Author")[:3]:
                 last_name = author.find(".//LastName")
@@ -252,23 +248,66 @@ def search_pubmed(query: str, max_results: int = 10, retmax: int = 100) -> ToolR
                         author_name += f" {initials.text}"
                     authors.append(author_name)
             
-            # Extract publication date
+            # Format author string
+            if len(authors) == 0:
+                author_str = "N/A"
+            elif len(authors) <= 3:
+                author_str = ", ".join(authors)
+                # Check if there are more authors
+                all_authors = article.findall(".//Author")
+                if len(all_authors) > 3:
+                    author_str += " et al."
+            else:
+                author_str = ", ".join(authors) + " et al."
+            
+            # Extract publication year
+            publish_year = "N/A"
             pub_date = article.find(".//PubDate")
-            date_str = "N/A"
             if pub_date is not None:
                 year = pub_date.find("Year")
-                month = pub_date.find("Month")
                 if year is not None:
-                    date_str = year.text
-                    if month is not None:
-                        date_str = f"{year.text} {month.text}"
+                    publish_year = year.text
+            
+            # Extract DOI
+            doi = "N/A"
+            # Look for DOI in ArticleIdList
+            for article_id in article.findall(".//ArticleId"):
+                id_type = article_id.get("IdType")
+                if id_type == "doi":
+                    doi = article_id.text
+                    break
+            
+            # Also check in ELocationID for DOI
+            if doi == "N/A":
+                for elocation in article.findall(".//ELocationID"):
+                    eid_type = elocation.get("EIdType")
+                    if eid_type == "doi":
+                        doi = elocation.text
+                        break
+            
+            # Extract abstract (for backwards compatibility)
+            abstract_parts = []
+            for abstract_text in article.findall(".//AbstractText"):
+                # Check for labeled sections (e.g., BACKGROUND, METHODS)
+                label = abstract_text.get("Label", "")
+                text = abstract_text.text or ""
+                if label:
+                    abstract_parts.append(f"{label}: {text}")
+                else:
+                    abstract_parts.append(text)
+            abstract = " ".join(abstract_parts) if abstract_parts else "N/A"
 
             articles.append({
-                "pmid": pmid,
                 "title": title,
+                "author": author_str,
+                "journal": journal,
+                "publish_year": publish_year,
+                "doi": doi,
+                # Keep backwards compatibility fields
+                "pmid": pmid,
+                "authors": authors,  # Keep original list format for compatibility
+                "pubdate": publish_year,  # Alias for backwards compatibility
                 "abstract": abstract,
-                "authors": authors,
-                "pubdate": date_str,
             })
 
         return ToolResult(True, articles)
