@@ -244,14 +244,19 @@ Remember: Your goal is to help scientists make informed decisions, not to provid
         ]
         self.add_message("user", user_question)
 
-        if verbose:
+        # Only show question header if not a ScientificAgent (which has its own header)
+        if verbose and not hasattr(self, 'persona'):
             print(f"\n{'='*60}")
             print(f"Question: {user_question}")
             print(f"{'='*60}\n")
 
         for iteration in range(self.max_iterations):
+            # Show iteration with agent name if available
             if verbose:
-                print(f"[Iteration {iteration + 1}/{self.max_iterations}]")
+                if hasattr(self, 'persona'):
+                    print(f"[{self.persona.title} - Iteration {iteration + 1}/{self.max_iterations}]")
+                else:
+                    print(f"[Iteration {iteration + 1}/{self.max_iterations}]")
 
             # Get response from LLM
             # Anthropic API requires system prompt separately
@@ -630,3 +635,23 @@ Each participant brings specialized knowledge to solve complex biomedical proble
 
 Remember: You are ONE expert on a team. Your goal is to contribute your specialized
 knowledge to the collective scientific effort, not to solve everything alone."""
+
+    def run(self, user_question: str, verbose: bool = False) -> str:
+        """Run the agent loop with persona identification.
+
+        Args:
+            user_question: The question to answer
+            verbose: Print intermediate steps
+
+        Returns:
+            Final response from the agent
+        """
+        # Print agent identification at the start
+        if verbose:
+            print(f"\n{'='*60}")
+            print(f"[{self.persona.title}]")
+            print(f"Role: {self.persona.role}")
+            print(f"{'='*60}")
+        
+        # Call parent's run method
+        return super().run(user_question, verbose)

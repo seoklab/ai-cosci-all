@@ -231,7 +231,7 @@ Your task:
 
 Be specific and constructive (2-4 sentences)."""
 
-            critique = self.critic.run(critique_prompt, verbose=False)  # Critic doesn't need verbose
+            critique = self.critic.run(critique_prompt, verbose=self.verbose)  # Show critic work if verbose
             self.meeting_transcript.append({
                 "speaker": "Critic",
                 "role": "Quality Review",
@@ -258,7 +258,7 @@ Provide a brief synthesis (2-3 sentences):
 
 Be concise - this is an interim summary."""
 
-                round_summary = self.pi.run(synthesis_prompt, verbose=False)
+                round_summary = self.pi.run(synthesis_prompt, verbose=self.verbose)
                 self.meeting_transcript.append({
                     "speaker": "PI",
                     "role": f"Round {round_num + 1} Synthesis",
