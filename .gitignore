@@ -2,6 +2,7 @@
 .env.*
 *.env
 *.pyc
+__pycache__/
 check_credit.py
 NEXT_SESSION.md
 <<<<<<< HEAD
