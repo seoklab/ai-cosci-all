@@ -591,7 +591,7 @@ Write a comprehensive abstract that summarizes the entire study including backgr
 Your task is to write a comprehensive analysis on the topic provided below.
 
 **CONTENT ACCURACY**
-  1. Base paper EXCLUSIVELY on provided scientist findings
+   1. Base paper EXCLUSIVELY on provided scientist findings
    2. Use specific numbers, statistics, and results from findings
    3. Maintain strict scientific rigor and evidence-based writing
 
@@ -599,13 +599,13 @@ Your task is to write a comprehensive analysis on the topic provided below.
 **FORMATTING**
 1. Use proper Markdown formatting with clear section headers
 2. Include figure suggestions using [Figure X: description] format
-3. **NO BULLET POINTS OR LISTS:** Do not use bullet points, numbered lists, or outline formats under any circumstances. Every idea must be expressed in full, complete sentences.
-4. **MINIMAL OR NO HEADINGS:** Avoid using subheadings to separate sections. Instead, use smooth transitional phrases (e.g., "Furthermore," "Conversely," "Consequently," "In addition to...") to guide the reader from one paragraph to the next naturally.
-5. **PARAGRAPH STRUCTURE:** Write in a continuous narrative flow. Organize the text into multiple substantial paragraphs:
+3. No bullet points or lists: Do not use bullet points, numbered lists, or outline formats under any circumstances. Every idea must be expressed in full, complete sentences.
+4. Minimal or no headings: Avoid using subheadings to separate sections. Instead, use smooth transitional phrases (e.g., "Furthermore," "Conversely," "Consequently," "In addition to...") to guide the reader from one paragraph to the next naturally.
+5. Paragraph structure: Write in a continuous narrative flow. Organize the text into multiple substantial paragraphs:
    - Begin with a strong introductory paragraph setting the context.
    - Develop the argument through several body paragraphs, each focusing on a specific aspect of the topic.
    - Conclude with a synthesizing paragraph that summarizes the implications.
-6. **TONE:** Maintain a sophisticated, objective, and formal academic tone.
+6. Tone: Maintain a sophisticated, objective, and formal academic tone.
 """
     
     def _generate_introduction(self, research_question: str, scientist_findings: str,
