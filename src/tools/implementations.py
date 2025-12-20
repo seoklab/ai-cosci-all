@@ -1141,13 +1141,13 @@ def get_tool_definitions() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "execute_python",
-                "description": "Execute Python code to analyze data, perform calculations, or create visualizations. Use for bioinformatics analysis. IMPORTANT: When saving output files (CSV, plots, etc.), prefix paths with OUTPUT_DIR to organize files properly (e.g., f'{OUTPUT_DIR}/results.csv'). OUTPUT_DIR is automatically available in your code.",
+                "description": "Execute Python code to analyze data, perform calculations, or create visualizations. Use for bioinformatics analysis. IMPORTANT: When saving output files (CSV, plots, etc.), prefix paths with OUTPUT_DIR to organize files properly (e.g., f'{OUTPUT_DIR}/results.csv'). OUTPUT_DIR is automatically available in your code. CRITICAL: When reporting results to other agents in your text response, mention files with {OUTPUT_DIR} prefix so they can find them.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "code": {
                             "type": "string",
-                            "description": "Python code to execute. Assume pandas, numpy, biopython are available. Use OUTPUT_DIR variable to save files (e.g., df.to_csv(f'{OUTPUT_DIR}/output.csv')).",
+                            "description": "Python code to execute. Assume pandas, numpy, biopython are available. ALWAYS use OUTPUT_DIR variable to save files (e.g., df.to_csv(f'{OUTPUT_DIR}/output.csv'), plt.savefig(f'{OUTPUT_DIR}/plot.png')). Never save files without OUTPUT_DIR prefix.",
                         }
                     },
                     "required": ["code"],

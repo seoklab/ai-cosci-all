@@ -31,10 +31,18 @@ def save_answer_to_file(answer: str, question: str, output_path: str = None, mod
     Returns:
         Path to the saved file
     """
+    from src.utils.output_manager import get_current_run_dir
+
     # Generate filename if not provided
     if output_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = f"answer_{timestamp}.md"
+
+        # Use OUTPUT_DIR if available
+        run_dir = get_current_run_dir()
+        if run_dir:
+            output_path = run_dir / f"answer_{timestamp}.md"
+        else:
+            output_path = f"answer_{timestamp}.md"
 
     # Ensure it's a Path object
     output_file = Path(output_path)
@@ -174,6 +182,12 @@ Examples:
         type=int,
         default=3,
         help="Maximum number of specialist agents in Virtual Lab mode (default: 3)",
+    )
+    parser.add_argument(
+        "--max-iterations",
+        type=int,
+        default=30,
+        help="Maximum iterations per agent for tool use (default: 30, useful for testing with lower values)",
     )
     parser.add_argument(
         "--api-key",
@@ -316,7 +330,8 @@ Examples:
                 max_team_size=args.team_size,
                 verbose=args.verbose,
                 data_dir=args.data_dir,
-                input_dir=args.input_dir
+                input_dir=args.input_dir,
+                max_iterations=args.max_iterations
             )
 
             logger.section("FINAL ANSWER (PI Synthesis with Red Flag Resolution)")
@@ -347,7 +362,8 @@ Examples:
                 max_team_size=args.team_size,
                 verbose=args.verbose,
                 data_dir=args.data_dir,
-                input_dir=args.input_dir
+                input_dir=args.input_dir,
+                max_iterations=args.max_iterations
             )
 
             print("\n" + "=" * 60)
@@ -436,7 +452,8 @@ Examples:
                     max_team_size=args.team_size,
                     verbose=args.verbose,
                     data_dir=args.data_dir,
-                    input_dir=args.input_dir
+                    input_dir=args.input_dir,
+                    max_iterations=args.max_iterations
                 )
 
                 logger.section("FINAL ANSWER (with Red Flag Resolution)")
@@ -464,7 +481,8 @@ Examples:
                     max_team_size=args.team_size,
                     verbose=args.verbose,
                     data_dir=args.data_dir,
-                    input_dir=args.input_dir
+                    input_dir=args.input_dir,
+                    max_iterations=args.max_iterations
                 )
 
                 print("\n" + "=" * 60)

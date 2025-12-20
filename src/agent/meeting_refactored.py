@@ -10,6 +10,7 @@ from src.agent.team_manager_refactored import (
     create_critic_persona,
 )
 from src.utils.logger import get_logger
+from src.utils.output_manager import get_current_run_dir
 
 
 class VirtualLabMeeting:
@@ -33,7 +34,8 @@ class VirtualLabMeeting:
         max_team_size: int = 3,
         verbose: bool = False,
         data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
-        input_dir: Optional[str] = None
+        input_dir: Optional[str] = None,
+        max_iterations: int = 30
     ):
         self.user_question = user_question
         self.verbose = verbose
@@ -42,6 +44,7 @@ class VirtualLabMeeting:
         self.provider = provider
         self.data_dir = data_dir
         self.input_dir = input_dir if input_dir is not None else data_dir
+        self.max_iterations = max_iterations
         self.logger = get_logger()
 
         self.logger.subsection("INITIALIZING SUBTASK-CENTRIC VIRTUAL LAB")
@@ -54,7 +57,8 @@ class VirtualLabMeeting:
             model=model,
             provider=provider,
             data_dir=data_dir,
-            input_dir=self.input_dir
+            input_dir=self.input_dir,
+            max_iterations=max_iterations
         )
 
         # PI designs team AND research plan
@@ -84,7 +88,8 @@ class VirtualLabMeeting:
                 model=model,
                 provider=provider,
                 data_dir=data_dir,
-                input_dir=self.input_dir
+                input_dir=self.input_dir,
+                max_iterations=max_iterations
             )
             for spec in team_specs
         }
@@ -96,7 +101,8 @@ class VirtualLabMeeting:
             model=model,
             provider=provider,
             data_dir=data_dir,
-            input_dir=self.input_dir
+            input_dir=self.input_dir,
+            max_iterations=max_iterations
         )
 
         self.meeting_transcript = []
@@ -126,7 +132,7 @@ class VirtualLabMeeting:
         self.logger.subtask(subtask_id, description, assigned)
         self.logger.verbose(f"Expected outputs: {', '.join(expected_outputs)}", indent=2)
         if dependencies:
-            self.logger.verbose(f"Dependencies: {', '.join(dependencies)}", indent=2)
+            self.logger.verbose(f"Dependencies: {', '.join(map(str, dependencies))}", indent=2)
 
         # Build cumulative context from all previous work (multi-round aware)
         if self.current_round > 0:
@@ -149,11 +155,23 @@ class VirtualLabMeeting:
 
             specialist = self.specialists[specialist_title]
 
+            # Get OUTPUT_DIR for context
+            run_dir = get_current_run_dir()
+            output_dir_info = ""
+            if run_dir:
+                output_dir_info = f"""
+**FILE LOCATIONS (CRITICAL):**
+- All files from this run are in: `{run_dir}`
+- When reading files from previous subtasks, use: `{{OUTPUT_DIR}}/filename.csv` in execute_python
+- When mentioning files in your text responses, ALWAYS include the full path or {{OUTPUT_DIR}} prefix
+- Example: Say "Results saved to {{OUTPUT_DIR}}/analysis.csv" NOT just "analysis.csv"
+"""
+
             # Construct subtask prompt with full context
             subtask_prompt = f"""**SUBTASK {subtask_id}:** {description}
 
 **Expected Outputs:** {', '.join(expected_outputs)}
-
+{output_dir_info}
 **Context from Previous Subtasks:**
 {dependency_context if dependency_context else "This is the first subtask - no previous context."}
 
@@ -231,10 +249,21 @@ Use tools as needed. Be concise but thorough."""
         sub_meeting_transcript = []
         num_turns = 2  # Each specialist gets 2 turns
 
+        # Get OUTPUT_DIR for context
+        run_dir = get_current_run_dir()
+        output_dir_info = ""
+        if run_dir:
+            output_dir_info = f"""
+**FILE LOCATIONS (CRITICAL):**
+- All files from this run are in: `{run_dir}`
+- When reading files from previous subtasks, use: `{{OUTPUT_DIR}}/filename.csv` in execute_python
+- When mentioning files in your text responses, ALWAYS include the full path or {{OUTPUT_DIR}} prefix
+"""
+
         initial_prompt = f"""**COLLABORATIVE SUBTASK {subtask_id}:** {description}
 
 **Expected Outputs:** {', '.join(expected_outputs)}
-
+{output_dir_info}
 **Context from Previous Subtasks:**
 {dependency_context if dependency_context else "This is the first subtask."}
 
@@ -886,7 +915,8 @@ def run_virtual_lab(
     max_team_size: int = 3,
     verbose: bool = False,
     data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
-    input_dir: Optional[str] = None
+    input_dir: Optional[str] = None,
+    max_iterations: int = 30
 ) -> str:
     """Run a subtask-centric Virtual Lab meeting.
 
@@ -900,6 +930,7 @@ def run_virtual_lab(
         verbose: Print detailed transcript
         data_dir: Path to database directory
         input_dir: Path to question-specific input data
+        max_iterations: Maximum iterations per agent (default: 30)
 
     Returns:
         Final synthesized answer with red flags addressed
@@ -921,7 +952,8 @@ def run_virtual_lab(
         max_team_size=max_team_size,
         verbose=verbose,
         data_dir=data_dir,
-        input_dir=input_dir
+        input_dir=input_dir,
+        max_iterations=max_iterations
     )
 
     final_answer = meeting.run_meeting(num_rounds=num_rounds)

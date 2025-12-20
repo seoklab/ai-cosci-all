@@ -39,7 +39,7 @@ class AgentPersona:
 class BioinformaticsAgent:
     """Agent for answering complex bioinformatics questions."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-20250514", provider: str = "anthropic", data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data", input_dir: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-20250514", provider: str = "anthropic", data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data", input_dir: Optional[str] = None, max_iterations: int = 30):
         if provider == "anthropic":
             self.client = AnthropicClient(api_key=api_key, model=model)
         else:
@@ -55,7 +55,7 @@ class BioinformaticsAgent:
             "find_files": find_files,
         }
         self.conversation_history = []
-        self.max_iterations = 30
+        self.max_iterations = max_iterations
 
     def get_system_prompt(self) -> str:
         """Get the system prompt for scientific reasoning."""
@@ -85,6 +85,11 @@ class BioinformaticsAgent:
      - OUTPUT_DIR is automatically available in execute_python code
      - This organizes all outputs into a run-specific directory
      - To read files you saved earlier: use f'{{OUTPUT_DIR}}/filename.csv'
+   - **CRITICAL FOR COLLABORATION**: When mentioning files in your TEXT responses to other agents:
+     - ALWAYS include the {{OUTPUT_DIR}} prefix or full path
+     - Say "Results saved to {{OUTPUT_DIR}}/analysis.csv" NOT just "analysis.csv"
+     - Say "See {{OUTPUT_DIR}}/plot.png for visualization" NOT just "plot.png"
+     - This ensures other agents can find your files
    - Query relevant databases to get context
    - Examine distributions, patterns, and outliers
    - Document assumptions clearly
@@ -474,9 +479,10 @@ class ScientificAgent(BioinformaticsAgent):
         model: str = "claude-sonnet-4-20250514",
         provider: str = "anthropic",
         data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
-        input_dir: Optional[str] = None
+        input_dir: Optional[str] = None,
+        max_iterations: int = 30
     ):
-        super().__init__(api_key, model, provider, data_dir, input_dir)
+        super().__init__(api_key, model, provider, data_dir, input_dir, max_iterations)
         self.persona = persona
 
     def get_system_prompt(self) -> str:
