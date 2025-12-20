@@ -11,6 +11,11 @@ from io import StringIO
 import signal
 from contextlib import contextmanager
 import os
+import asyncio
+import nest_asyncio
+
+# Allow nested event loops (needed for Paper-QA async calls)
+nest_asyncio.apply()
 
 # CRITICAL: Set environment variables at module level BEFORE any PaperQA imports
 # LiteLLM reads these at import time, not runtime!
@@ -817,7 +822,7 @@ def search_literature(
 
         # Create settings - LiteLLM will automatically use OPENROUTER_KEY from environment
         # CRITICAL: Disable LLM usage during PDF parsing to avoid API calls
-        # The LLM will ONLY be used during the query phase (docs.query())
+        # The LLM will ONLY be used during the query phase (docs.aquery())
         from paperqa.settings import ParsingSettings
 
         # Determine if we should use LLM during parsing based on model tier
@@ -875,7 +880,8 @@ def search_literature(
                         print(f"[DEBUG] Loading PDF: {pdf_file.name}...", file=sys.stderr)
                         # Provide a basic citation - LLM may be used for metadata extraction if use_doc_details=True
                         simple_citation = f"{pdf_file.stem}, Local PDF"
-                        docs.add(str(pdf_file), citation=simple_citation, settings=settings)
+                        # Paper-QA v5+ uses async aadd instead of sync add
+                        asyncio.run(docs.aadd(str(pdf_file), citation=simple_citation, settings=settings))
                         pdf_count += 1
                         llm_used_msg = "with LLM metadata extraction" if settings.parsing.use_doc_details else "no LLM call"
                         print(f"[DEBUG] Successfully loaded {pdf_file.name} ({llm_used_msg})", file=sys.stderr)
@@ -930,8 +936,9 @@ def search_literature(
                 try:
                     print(f"[DEBUG] Querying with LLM: {settings.llm}", file=sys.stderr)
                     print(f"[DEBUG] Querying with embedding: {settings.embedding}", file=sys.stderr)
-                    local_answer = docs.query(question, settings=settings)
-                    
+                    # Paper-QA v5+ uses async aquery instead of sync query
+                    local_answer = asyncio.run(docs.aquery(question, settings=settings))
+
                     # Check if local answer is sufficient (has contexts and not "I cannot answer")
                     has_good_local_answer = (
                         local_answer 
@@ -1033,7 +1040,8 @@ def search_literature(
                             tmp_path = tmp_file.name
 
                         try:
-                            docs.add(tmp_path, citation=citation, settings=settings)
+                            # Paper-QA v5+ uses async aadd instead of sync add
+                            asyncio.run(docs.aadd(tmp_path, citation=citation, settings=settings))
                             s2_papers_added += 1
                         finally:
                             # Clean up temporary file
@@ -1105,7 +1113,8 @@ def search_literature(
                                 tmp_path = tmp_file.name
 
                             try:
-                                docs.add(tmp_path, citation=citation, settings=settings)
+                                # Paper-QA v5+ uses async aadd instead of sync add
+                                asyncio.run(docs.aadd(tmp_path, citation=citation, settings=settings))
                                 pmc_papers_added += 1
                             finally:
                                 # Clean up temporary file
@@ -1125,7 +1134,8 @@ def search_literature(
                 pass
 
         # Query the combined document collection
-        answer_obj = docs.query(question, settings=settings)
+        # Paper-QA v5+ uses async aquery instead of sync query
+        answer_obj = asyncio.run(docs.aquery(question, settings=settings))
 
         # Extract contexts and references
         contexts = [
@@ -1170,13 +1180,13 @@ def get_tool_definitions() -> list[dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "execute_python",
-                "description": "Execute Python code to analyze data, perform calculations, or create visualizations. Use for bioinformatics analysis. IMPORTANT: When saving output files (CSV, plots, etc.), prefix paths with OUTPUT_DIR to organize files properly (e.g., f'{OUTPUT_DIR}/results.csv'). OUTPUT_DIR is automatically available in your code.",
+                "description": "Execute Python code to analyze data, perform calculations, or create visualizations. Use for bioinformatics analysis. IMPORTANT: When saving output files (CSV, plots, etc.), prefix paths with OUTPUT_DIR to organize files properly (e.g., f'{OUTPUT_DIR}/results.csv'). OUTPUT_DIR is automatically available in your code. CRITICAL: When reporting results to other agents in your text response, mention files with {OUTPUT_DIR} prefix so they can find them.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "code": {
                             "type": "string",
-                            "description": "Python code to execute. Assume pandas, numpy, biopython are available. Use OUTPUT_DIR variable to save files (e.g., df.to_csv(f'{OUTPUT_DIR}/output.csv')).",
+                            "description": "Python code to execute. Assume pandas, numpy, biopython are available. ALWAYS use OUTPUT_DIR variable to save files (e.g., df.to_csv(f'{OUTPUT_DIR}/output.csv'), plt.savefig(f'{OUTPUT_DIR}/plot.png')). Never save files without OUTPUT_DIR prefix.",
                         }
                     },
                     "required": ["code"],

@@ -10,7 +10,6 @@ Key Features:
 - Sequential citation numbering with proper References section
 - Clean separation of concerns with dedicated classes
 """
-
 from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 import re
@@ -19,6 +18,10 @@ import time
 from src.agent.openrouter_client import OpenRouterClient
 from src.agent.anthropic_client import AnthropicClient
 from src.tools.implementations import search_literature, search_pubmed
+
+from src.tools.implementations_cached import (
+    search_literature_cached as search_literature,
+)
 
 
 @dataclass
