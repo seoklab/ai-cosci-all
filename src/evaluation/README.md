@@ -1,6 +1,22 @@
-# AI-CoSci Pairwise Evaluation Guide
+# AI-CoSci Evaluation System
 
-Guide for using the pairwise comparison system to evaluate answer quality.
+Complete guide for automatic answer evaluation using LLM-as-a-judge (FastChat approach).
+
+---
+
+## Overview
+
+The evaluation system provides two main modes:
+
+1. **Auto-Evaluation**: Automatically scores every generated answer (1-10 scale)
+   - Runs automatically for all CLI modes
+   - Integrated into answer files
+   - Based on FastChat single-v1 judging approach
+
+2. **Pairwise Comparison**: Compare two answers side-by-side
+   - Determines winner (A, B, or Tie)
+   - Detailed comparative analysis
+   - Saved to `tests/evaluation/` directory
 
 ---
 
@@ -22,7 +38,111 @@ OPENROUTER_API_KEY=sk-or-v1-xxxxx
 
 ---
 
-## Basic Usage
+## Auto-Evaluation System
+
+### How It Works
+
+**Every answer is automatically evaluated** - no flags or setup needed!
+
+#### Evaluation Flow
+
+1. Agent generates answer to your question
+2. Auto-evaluator analyzes answer quality (1-10 scale)
+3. Evaluation results integrated into answer file
+4. Score and feedback displayed in terminal
+
+#### Evaluation Criteria
+
+Answers are scored based on:
+
+- **Scientific Accuracy** (30%): Correctness and validity of scientific content
+- **Evidence Quality** (20%): Citations, references, and supporting evidence
+- **Methodological Rigor** (15%): Appropriateness of analytical approaches
+- **Completeness** (15%): Coverage of question aspects
+- **Clarity** (10%): Organization and readability
+- **Critical Thinking** (10%): Depth of analysis and insights
+
+#### Example Output
+
+```bash
+python -m src.cli --question "What is T cell exhaustion?" --verbose
+
+# Terminal output:
+============================================================
+AUTO-EVALUATION (FastChat LLM-as-a-Judge)
+============================================================
+
+============================================================
+📊 FINAL SCORE: 7.0/10.0
+============================================================
+
+Here's my expert evaluation of the response:
+
+**Scientific Accuracy (30%): 25/30**
+- Accurately describes T cell exhaustion as a distinct differentiation state
+- Correctly identifies key molecular players (TOX, TCF-1)
+...
+```
+
+#### Answer File Structure
+
+Every answer file includes evaluation results:
+
+```markdown
+# CoScientist Research Report
+**Generated:** 2025-12-21 00:55:07
+**Mode:** Combined
+
+## Research Question
+What is T cell exhaustion?
+
+## Final Answer
+[Answer content...]
+
+---
+
+## Auto-Evaluation
+
+**Score:** 7.0 / 10.0
+
+**Evaluation Date:** 2025-12-21 00:55:19
+
+### Detailed Feedback
+
+Here's my expert evaluation of the response:
+
+**Scientific Accuracy (30%): 25/30**
+- Accurately describes T cell exhaustion...
+[Full evaluation feedback...]
+```
+
+#### Configuration
+
+**Default Judge Model:** `anthropic/claude-3.5-sonnet`
+
+To change the judge model, edit `src/cli.py`:
+
+```python
+def auto_evaluate_answer(answer: str, question: str, verbose: bool = False):
+    # Change this line:
+    eval_model = "anthropic/claude-3.5-sonnet"
+```
+
+Recommended models:
+- `anthropic/claude-3.5-sonnet` (default, best balance)
+- `anthropic/claude-sonnet-4` (highest quality)
+- `google/gemini-3-pro-preview` (fast, lower cost)
+
+#### Files Location
+
+- **Answer files**: Auto-generated `answer_YYYYMMDD_HHMMSS.md` in project root (or custom path)
+- **Evaluation included**: Integrated in answer file (see "Auto-Evaluation" section)
+
+---
+
+## Pairwise Comparison
+
+### Basic Usage
 
 ### 1. Compare Two Answer Files
 
@@ -131,7 +251,27 @@ done
 
 ## Evaluation Criteria
 
-The judge model evaluates answers based on:
+### Auto-Evaluation Scoring
+
+Each answer receives a score from 1-10 based on:
+
+1. **Scientific Accuracy (30%)**: Correctness of facts, validity of interpretations
+2. **Evidence Quality (20%)**: Quality and relevance of citations (PMIDs preferred)
+3. **Methodological Rigor (15%)**: Appropriateness of analytical methods
+4. **Completeness (15%)**: Thoroughness in addressing all question aspects
+5. **Clarity (10%)**: Organization, readability, scientific communication
+6. **Critical Thinking (10%)**: Analysis depth, insights, limitations
+
+**Score Interpretation:**
+- 9-10: Outstanding answer with comprehensive evidence
+- 7-8: Strong answer, minor improvements possible
+- 5-6: Adequate answer with notable gaps
+- 3-4: Weak answer, significant issues
+- 1-2: Poor answer, major scientific errors
+
+### Pairwise Comparison
+
+The judge model compares answers based on:
 
 1. **Scientific Accuracy**: Correctness of scientific facts and interpretations
 2. **Evidence Quality**: PMID citations, reliability of sources
@@ -303,15 +443,156 @@ python src/evaluation/pairwise_evaluator.py \
   -o tests/evaluation/q5_eval.md
 ```
 
+---Implementation Details
+
+### Auto-Evaluation Implementation
+
+Located in `src/evaluation/single_evaluator.py`:
+
+```python
+from src.evaluation.single_evaluator import evaluate_answer
+
+# Evaluate an answer
+result = evaluate_answer(
+    question="What is T cell exhaustion?",
+    answer="[Generated answer...]",
+    judge_model="anthropic/claude-3.5-sonnet",
+    verbose=True
+)
+
+print(f"Score: {result.score}/10.0")
+print(f"Feedback: {result.explanation}")
+```
+
+**Key Functions:**
+- `evaluate_answer()`: Main entry point for single answer evaluation
+- `SingleAnswerJudge`: OpenRouter-based judge class
+- `create_biomedical_evaluation_prompt()`: Prompt engineering for biomedical content
+
+### Pairwise Comparison Implementation
+
+Located in `src/evaluation/pairwise_evaluator.py`:
+
+```python
+from src.evaluation.pairwise_evaluator import evaluate_pairwise
+
+# Compare two answers
+result = evaluate_pairwise(
+    question="What is CRISPR?",
+    answer_a="[Answer A content...]",
+    answer_b="[Answer B content...]",
+    judge_model="anthropic/claude-3.5-sonnet"
+)
+
+print(f"Winner: {result.winner}")  # "A", "B", or "Tie"
+```
+
+### Integration with CLI
+
+All CLI modes automatically trigger evaluation:
+
+```python
+# src/cli.py
+def main():
+    # ... generate answer ...
+    
+    # Auto-evaluate (always runs)
+    eval_score, eval_explanation = auto_evaluate_answer(
+        answer=final_answer,
+        question=args.question,
+        verbose=args.verbose
+    )
+    
+    # Save with integrated evaluation
+    output_file = save_answer_to_file(
+        answer=final_answer,
+        question=args.question,
+        eval_score=eval_score,
+        eval_explanation=eval_explanation
+    )
+```
+
 ---
 
-## Quick Reference Commands
+## API Usage
 
-```bash
-# Basic comparison
-python src/evaluation/pairwise_evaluator.py -q "your question" -a file1.md -b file2.md -v
+### Programmatic Evaluation
 
-# With custom output
+```python
+from src.evaluation.single_evaluator import evaluate_answer
+from src.evaluation.pairwise_evaluator import evaluate_pairwise
+
+# Single answer evaluation
+result = evaluate_answer(
+    question="Your research question",
+    answer="Generated answer",
+    judge_model="anthropic/claude-3.5-sonnet",
+    verbose=True
+)
+
+# Access results
+print(f"Score: {result.score}")
+print(f"Explanation: {result.explanation}")
+
+# Pairwise comparison
+comparison = evaluate_pairwise(
+    question="Your research question",
+    answer_a="First answer",
+    answer_b="Second answer"
+)
+
+print(f"Winner: {comparison.winner}")
+print(f"Analysis: {comparison.explanation}")
+```
+
+---
+
+## Troubleshooting
+
+### Evaluation Not Running
+
+**Symptom:** No evaluation section in answer file
+
+**Solutions:**
+1. Check API key in `.env`: `OPENROUTER_API_KEY=sk-or-v1-...`
+2. Verify network connection to OpenRouter API
+3. Check for error messages in terminal output
+
+### Low Scores
+
+**Common reasons:**
+- Missing citations/PMIDs
+- Incomplete coverage of question aspects
+- Lack of critical analysis or limitations discussion
+- Scientific inaccuracies
+
+**Improvements:**
+- Add literature references with PMIDs
+- Use `search_pubmed` tool for citations
+- Include methodological details
+- Discuss limitations and future directions
+
+### API Rate Limits
+
+**Symptom:** `429 Too Many Requests` error
+
+**Solutions:**
+- Wait a few seconds between evaluations
+- Use lower-tier judge model for testing
+- Consider batching evaluations
+
+---
+
+## References
+
+- [FastChat LLM Judge Paper](https://arxiv.org/abs/2306.05685)
+- [OpenRouter API Documentation](https://openrouter.ai/docs)
+- [AI-CoSci Project Documentation](../../README.md)
+- [Auto-Evaluation Implementation Details](../../docs/AUTO_EVAL_IMPLEMENTATION.md)
+
+---
+
+**Last Updated:** 2025-12-21
 python src/evaluation/pairwise_evaluator.py -q question.txt -a ans1.md -b ans2.md -o results/eval.md
 
 # Different judge model
