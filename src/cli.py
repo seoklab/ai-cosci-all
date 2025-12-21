@@ -429,6 +429,41 @@ Examples:
             # Print total elapsed time
             logger.print_elapsed_time()
 
+        elif args.subtask_centric:
+            # Subtask-Centric Virtual Lab mode - sequential research plan-driven collaboration
+            print("\n" + "=" * 60)
+            print("SUBTASK-CENTRIC VIRTUAL LAB MODE")
+            print("=" * 60)
+            print(f"Question: {args.question}")
+            print(f"Configuration: {args.rounds} rounds, max {args.team_size} specialists")
+            print("=" * 60)
+
+            # Create run-specific output directory
+            output_mgr = get_output_manager()
+            run_dir = output_mgr.create_run_directory(args.question, mode="subtask-centric")
+            print(f"Output directory: {run_dir}\n")
+
+            final_answer = run_virtual_lab_subtask(
+                question=args.question,
+                api_key=args.api_key,
+                model=args.model,
+                provider=provider,
+                num_rounds=args.rounds,
+                max_team_size=args.team_size,
+                verbose=args.verbose,
+                data_dir=args.data_dir,
+                input_dir=args.input_dir
+            )
+
+            print("\n" + "=" * 60)
+            print("FINAL ANSWER (PI Synthesis with Red Flag Resolution):")
+            print("=" * 60)
+            print(final_answer)
+
+            # Save to file
+            output_file = save_answer_to_file(final_answer, args.question, args.output, mode="subtask-centric")
+            print(f"\n✓ Answer saved to: {output_file}")
+
         elif args.virtual_lab:
             # Virtual Lab mode - multi-agent collaboration (original parallel model)
             print("\n" + "=" * 60)
@@ -545,6 +580,7 @@ Examples:
                 run_dir = output_mgr.create_run_directory(question, mode="subtask-centric")
                 logger.success(f"Output directory: {run_dir}")
                 print()
+                print(f"Output directory: {run_dir}\n")
 
                 final_answer = run_virtual_lab_subtask(
                     question=question,
@@ -560,6 +596,12 @@ Examples:
                 )
 
                 logger.section("FINAL ANSWER (with Red Flag Resolution)")
+                    input_dir=args.input_dir
+                )
+
+                print("\n" + "=" * 60)
+                print("FINAL ANSWER (with Red Flag Resolution):")
+                print("=" * 60)
                 print(final_answer)
 
                 # Auto-save in interactive mode
@@ -568,6 +610,8 @@ Examples:
 
                 # Print elapsed time for this question
                 logger.print_elapsed_time()
+                print(f"✓ Saved to: {output_file}")
+                print()
 
             elif args.virtual_lab:
                 # Virtual Lab mode in interactive
