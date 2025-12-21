@@ -17,9 +17,17 @@ from src.virtuallab_workflow.workflow import run_consensus_workflow, run_researc
 
 def save_answer_to_file(answer: str, question: str, output_path: str = None, mode: str = "single") -> str:
     """Save the final answer to a markdown file."""
+    from src.utils.output_manager import get_current_run_dir
+
     if output_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = f"answer_{timestamp}.md"
+
+        # Use OUTPUT_DIR if available
+        run_dir = get_current_run_dir()
+        if run_dir:
+            output_path = run_dir / f"answer_{timestamp}.md"
+        else:
+            output_path = f"answer_{timestamp}.md"
 
     output_file = Path(output_path)
     output_file.parent.mkdir(parents=True, exist_ok=True)

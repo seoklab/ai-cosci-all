@@ -9,6 +9,8 @@ from src.agent.team_manager_refactored import (
     create_pi_persona,
     create_critic_persona,
 )
+from src.utils.logger import get_logger
+from src.utils.output_manager import get_current_run_dir
 
 
 class VirtualLabMeeting:
@@ -32,7 +34,8 @@ class VirtualLabMeeting:
         max_team_size: int = 3,
         verbose: bool = False,
         data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
-        input_dir: Optional[str] = None
+        input_dir: Optional[str] = None,
+        max_iterations: int = 30
     ):
         self.user_question = user_question
         self.verbose = verbose
@@ -41,25 +44,25 @@ class VirtualLabMeeting:
         self.provider = provider
         self.data_dir = data_dir
         self.input_dir = input_dir if input_dir is not None else data_dir
+        self.max_iterations = max_iterations
+        self.logger = get_logger()
 
-        if self.verbose:
-            print("\n" + "=" * 60)
-            print("INITIALIZING SUBTASK-CENTRIC VIRTUAL LAB")
-            print("=" * 60)
+        self.logger.subsection("INITIALIZING SUBTASK-CENTRIC VIRTUAL LAB")
 
         # Initialize PI
+        self.logger.progress("Creating Principal Investigator agent...")
         self.pi = ScientificAgent(
             persona=create_pi_persona(),
             api_key=api_key,
             model=model,
             provider=provider,
             data_dir=data_dir,
-            input_dir=self.input_dir
+            input_dir=self.input_dir,
+            max_iterations=max_iterations
         )
 
         # PI designs team AND research plan
-        if self.verbose:
-            print("\n[PI is designing team and research plan...]")
+        self.logger.progress("PI is designing team and research plan...")
 
         team_specs, self.research_plan = create_research_team_with_plan(
             user_question,
@@ -67,15 +70,15 @@ class VirtualLabMeeting:
             max_team_size=max_team_size
         )
 
-        if self.verbose:
-            print(f"\n[Team designed: {len(team_specs)} specialists]")
-            for spec in team_specs:
-                print(f"  - {spec['title']}")
+        self.logger.success(f"Team designed: {len(team_specs)} specialists")
+        for spec in team_specs:
+            self.logger.info(f"  • {spec['title']}", indent=2)
 
-            print(f"\n[Research plan: {len(self.research_plan)} subtasks]")
-            for subtask in self.research_plan:
-                print(f"  {subtask['subtask_id']}. {subtask['description']}")
-                print(f"     Assigned: {', '.join(subtask['assigned_specialists'])}")
+        self.logger.success(f"Research plan: {len(self.research_plan)} subtasks")
+        for subtask in self.research_plan:
+            assigned_str = ', '.join(subtask['assigned_specialists'])
+            self.logger.info(f"  {subtask['subtask_id']}. {subtask['description']}", indent=2)
+            self.logger.verbose(f"     → Assigned: {assigned_str}", indent=2)
 
         # Create specialist agents (indexed by title for lookup)
         self.specialists = {
@@ -85,7 +88,8 @@ class VirtualLabMeeting:
                 model=model,
                 provider=provider,
                 data_dir=data_dir,
-                input_dir=self.input_dir
+                input_dir=self.input_dir,
+                max_iterations=max_iterations
             )
             for spec in team_specs
         }
@@ -97,11 +101,18 @@ class VirtualLabMeeting:
             model=model,
             provider=provider,
             data_dir=data_dir,
-            input_dir=self.input_dir
+            input_dir=self.input_dir,
+            max_iterations=max_iterations
         )
 
         self.meeting_transcript = []
         self.subtask_outputs = {}  # Track outputs from each subtask
+
+        # Multi-round tracking
+        self.round_outputs = {}  # {round_num: {subtask_id: output}}
+        self.round_syntheses = []  # PI synthesis after each round
+        self.round_critiques = []  # Critic reviews after each round
+        self.current_round = 0
 
     def _execute_subtask_sequential(self, subtask: Dict[str, Any]) -> str:
         """Execute a single subtask with assigned specialists in sequence.
@@ -118,36 +129,49 @@ class VirtualLabMeeting:
         expected_outputs = subtask['expected_outputs']
         dependencies = subtask.get('dependencies', [])
 
-        if self.verbose:
-            print(f"\n{'='*60}")
-            print(f"[SUBTASK {subtask_id}: {description}]")
-            print(f"Assigned: {', '.join(assigned)}")
-            print(f"Expected outputs: {', '.join(expected_outputs)}")
-            print(f"{'='*60}")
+        self.logger.subtask(subtask_id, description, assigned)
+        self.logger.verbose(f"Expected outputs: {', '.join(expected_outputs)}", indent=2)
+        if dependencies:
+            self.logger.verbose(f"Dependencies: {', '.join(map(str, dependencies))}", indent=2)
 
-        # Build context from dependent subtasks
-        dependency_context = self._build_dependency_context(dependencies)
+        # Build cumulative context from all previous work (multi-round aware)
+        if self.current_round > 0:
+            # Multi-round mode: use cumulative context
+            dependency_context = self._build_cumulative_context(subtask_id, self.current_round)
+        else:
+            # Legacy single-round mode: use dependency-based context
+            dependency_context = self._build_dependency_context(dependencies)
 
         # If 2+ specialists assigned, run a sub-meeting
         if len(assigned) >= 2:
-            if self.verbose:
-                print(f"\n[Sub-meeting: {' & '.join(assigned)} collaborating...]")
+            self.logger.progress(f"Sub-meeting: {' & '.join(assigned)} collaborating...", indent=2)
             result = self._run_submeeting(subtask, dependency_context, assigned)
         else:
             # Single specialist execution
             specialist_title = assigned[0]
             if specialist_title not in self.specialists:
-                if self.verbose:
-                    print(f"[WARNING: Specialist '{specialist_title}' not found, skipping]")
+                self.logger.warning(f"Specialist '{specialist_title}' not found, skipping", indent=2)
                 return ""
 
             specialist = self.specialists[specialist_title]
+
+            # Get OUTPUT_DIR for context
+            run_dir = get_current_run_dir()
+            output_dir_info = ""
+            if run_dir:
+                output_dir_info = f"""
+**FILE LOCATIONS (CRITICAL):**
+- All files from this run are in: `{run_dir}`
+- When reading files from previous subtasks, use: `{{OUTPUT_DIR}}/filename.csv` in execute_python
+- When mentioning files in your text responses, ALWAYS include the full path or {{OUTPUT_DIR}} prefix
+- Example: Say "Results saved to {{OUTPUT_DIR}}/analysis.csv" NOT just "analysis.csv"
+"""
 
             # Construct subtask prompt with full context
             subtask_prompt = f"""**SUBTASK {subtask_id}:** {description}
 
 **Expected Outputs:** {', '.join(expected_outputs)}
-
+{output_dir_info}
 **Context from Previous Subtasks:**
 {dependency_context if dependency_context else "This is the first subtask - no previous context."}
 
@@ -161,14 +185,13 @@ Execute this subtask using your expertise. Remember to:
 
 Use tools as needed. Be concise but thorough."""
 
-            if self.verbose:
-                print(f"\n--- {specialist_title} working on subtask ---")
+            self.logger.agent_action(specialist_title, f"Working on subtask {subtask_id}", indent=2)
 
             result = specialist.run(subtask_prompt, verbose=self.verbose)
 
+            self.logger.verbose(f"{specialist_title} completed subtask", indent=2)
             if self.verbose:
-                preview = result[:300] + "..." if len(result) > 300 else result
-                print(f"\n{specialist_title} output:\n{preview}")
+                self.logger.result_summary(f"{specialist_title} output", result, max_lines=5)
 
             # Add to transcript
             self.meeting_transcript.append({
@@ -180,6 +203,13 @@ Use tools as needed. Be concise but thorough."""
 
         # Store outputs for this subtask
         self.subtask_outputs[subtask_id] = result
+
+        # If in multi-round mode, also store in round_outputs
+        if self.current_round > 0:
+            if self.current_round not in self.round_outputs:
+                self.round_outputs[self.current_round] = {}
+            self.round_outputs[self.current_round][subtask_id] = result
+
         return result
 
     def _run_submeeting(
@@ -219,10 +249,21 @@ Use tools as needed. Be concise but thorough."""
         sub_meeting_transcript = []
         num_turns = 2  # Each specialist gets 2 turns
 
+        # Get OUTPUT_DIR for context
+        run_dir = get_current_run_dir()
+        output_dir_info = ""
+        if run_dir:
+            output_dir_info = f"""
+**FILE LOCATIONS (CRITICAL):**
+- All files from this run are in: `{run_dir}`
+- When reading files from previous subtasks, use: `{{OUTPUT_DIR}}/filename.csv` in execute_python
+- When mentioning files in your text responses, ALWAYS include the full path or {{OUTPUT_DIR}} prefix
+"""
+
         initial_prompt = f"""**COLLABORATIVE SUBTASK {subtask_id}:** {description}
 
 **Expected Outputs:** {', '.join(expected_outputs)}
-
+{output_dir_info}
 **Context from Previous Subtasks:**
 {dependency_context if dependency_context else "This is the first subtask."}
 
@@ -320,7 +361,7 @@ This is your last turn - make it count!"""
         return combined_output
 
     def _build_dependency_context(self, dependencies: List[int]) -> str:
-        """Build context string from dependent subtasks.
+        """Build context string from dependent subtasks (legacy - single round).
 
         Args:
             dependencies: List of subtask IDs this subtask depends on
@@ -346,6 +387,97 @@ This is your last turn - make it count!"""
                     )
 
         return "\n\n" + "-" * 60 + "\n\n".join(context_parts) if context_parts else ""
+
+    def _build_cumulative_context(self, current_subtask_id: int, current_round: int) -> str:
+        """Build cumulative context from all previous work.
+
+        For multi-round workflow, each subtask sees:
+        1. ALL outputs from all subtasks in previous rounds
+        2. ALL completed subtasks in the current round (before this one)
+        3. PI syntheses from previous rounds
+
+        Args:
+            current_subtask_id: The subtask currently being executed
+            current_round: The current round number (1-indexed)
+
+        Returns:
+            Formatted context string with all previous work
+        """
+        context_parts = []
+
+        # Part 1: Previous rounds' work (if any)
+        if current_round > 1:
+            context_parts.append("=" * 70)
+            context_parts.append("PREVIOUS ROUNDS SUMMARY")
+            context_parts.append("=" * 70)
+
+            for round_num in range(1, current_round):
+                context_parts.append(f"\n### ROUND {round_num} ###")
+
+                # Include all subtask outputs from this previous round
+                if round_num in self.round_outputs:
+                    for subtask_id, output in sorted(self.round_outputs[round_num].items()):
+                        subtask = next(
+                            (st for st in self.research_plan if st['subtask_id'] == subtask_id),
+                            None
+                        )
+                        if subtask:
+                            desc = subtask['description']
+                            assigned = ', '.join(subtask['assigned_specialists'])
+                            context_parts.append(
+                                f"\n**Subtask {subtask_id}: {desc}**\n"
+                                f"(Team: {assigned})\n\n{output}"
+                            )
+
+                # Include PI synthesis from this round
+                if round_num - 1 < len(self.round_syntheses):
+                    synthesis = self.round_syntheses[round_num - 1]
+                    context_parts.append(
+                        f"\n**PI Synthesis (Round {round_num}):**\n{synthesis}"
+                    )
+
+                # Include critic review from this round
+                if round_num - 1 < len(self.round_critiques):
+                    critique = self.round_critiques[round_num - 1]
+                    context_parts.append(
+                        f"\n**Critic Review (Round {round_num}):**\n{critique}"
+                    )
+
+        # Part 2: Current round's completed subtasks (before this one)
+        current_round_has_context = False
+        if current_round in self.round_outputs:
+            completed_in_round = [
+                (sid, out) for sid, out in self.round_outputs[current_round].items()
+                if sid < current_subtask_id
+            ]
+            if completed_in_round:
+                current_round_has_context = True
+                if current_round > 1:
+                    context_parts.append("\n" + "=" * 70)
+                context_parts.append(f"CURRENT ROUND {current_round} (Completed Subtasks)")
+                context_parts.append("=" * 70)
+
+                for subtask_id, output in sorted(completed_in_round):
+                    subtask = next(
+                        (st for st in self.research_plan if st['subtask_id'] == subtask_id),
+                        None
+                    )
+                    if subtask:
+                        desc = subtask['description']
+                        assigned = ', '.join(subtask['assigned_specialists'])
+                        context_parts.append(
+                            f"\n**Subtask {subtask_id}: {desc}**\n"
+                            f"(Team: {assigned})\n\n{output}"
+                        )
+
+        # If no context at all
+        if not context_parts:
+            if current_round == 1 and current_subtask_id == 1:
+                return "This is the first subtask in the first round - no previous context available."
+            else:
+                return "No previous work available yet for this subtask."
+
+        return "\n\n".join(context_parts)
 
     def _extract_red_flags(self, critique_text: str) -> List[Dict[str, str]]:
         """Extract structured red flags from critic's output.
@@ -392,24 +524,147 @@ This is your last turn - make it count!"""
 
         return red_flags
 
+    def _execute_single_round(self, round_num: int) -> tuple[str, List[Dict[str, str]]]:
+        """Execute a single round of the research plan.
+
+        Args:
+            round_num: The current round number (1-indexed)
+
+        Returns:
+            Tuple of (round_synthesis, red_flags)
+        """
+        self.current_round = round_num
+
+        # Clear subtask_outputs for this round (will be populated during execution)
+        self.subtask_outputs = {}
+
+        # Log round start
+        if round_num == 1:
+            self.logger.subsection(f"ROUND {round_num}: INITIAL RESEARCH EXECUTION")
+        else:
+            self.logger.subsection(f"ROUND {round_num}: REFINEMENT & ITERATION")
+            self.logger.info(f"Teams will see ALL work from {round_num-1} previous round(s)", indent=2)
+
+        # Execute all subtasks sequentially with cumulative context
+        self.logger.info(f"Executing {len(self.research_plan)} subtasks in sequence...", indent=2)
+
+        for subtask in self.research_plan:
+            self._execute_subtask_sequential(subtask)
+
+        self.logger.success(f"All {len(self.research_plan)} subtasks completed in Round {round_num}", indent=2)
+
+        # Critic review for this round
+        self.logger.subsection(f"ROUND {round_num}: CRITIC REVIEW")
+
+        all_subtask_outputs = "\n\n".join([
+            f"=== SUBTASK {st_id} ===\n{output}"
+            for st_id, output in sorted(self.subtask_outputs.items())
+        ])
+
+        critique_prompt = f"""Review Round {round_num} subtask outputs and generate a Red Flag Checklist.
+
+**Original Question:** {self.user_question}
+
+**Round {round_num} Subtask Outputs:**
+{all_subtask_outputs}
+
+**Your Task:**
+Generate a structured Red Flag Checklist identifying CRITICAL flaws that MUST be fixed.
+
+Use this format for each flag:
+
+[CRITICAL/MODERATE/MINOR - Category]
+- Flag ID: R{round_num}-XX-N
+- Issue: [Specific problem]
+- Location: [Which subtask/analysis]
+- Required Fix: [Exact action needed]
+
+Focus on:
+- Incorrect analyses
+- Missing critical steps
+- Unsupported claims
+- Data not properly examined
+- Files mentioned but not analyzed
+
+If work is sound, output: "No critical red flags detected."""
+
+        self.logger.agent_action("Scientific Critic", f"Reviewing Round {round_num} outputs", indent=2)
+
+        critique = self.critic.run(critique_prompt, verbose=False)
+        self.round_critiques.append(critique)
+
+        self.meeting_transcript.append({
+            "speaker": "Critic",
+            "role": f"Round {round_num} Red Flag Checklist",
+            "content": critique
+        })
+
+        # Extract red flags
+        red_flags = self._extract_red_flags(critique)
+
+        critical_count = sum(1 for f in red_flags if f['severity'] == 'CRITICAL')
+        if critical_count > 0:
+            self.logger.warning(f"Extracted {len(red_flags)} red flags ({critical_count} CRITICAL)", indent=2)
+        else:
+            self.logger.success(f"Extracted {len(red_flags)} red flags (no critical issues)", indent=2)
+
+        if self.verbose:
+            for flag in red_flags[:5]:  # Show first 5
+                self.logger.verbose(f"  - [{flag['severity']}] {flag['flag_id']}: {flag['issue'][:60]}...", indent=2)
+
+        # PI Round Synthesis
+        self.logger.subsection(f"ROUND {round_num}: PI SYNTHESIS")
+
+        round_summary_prompt = f"""Synthesize the findings from Round {round_num}.
+
+**Original Question:** {self.user_question}
+
+**Round {round_num} Work:**
+{all_subtask_outputs}
+
+**Critic's Red Flags:**
+{critique}
+
+**Your Task:**
+Provide a brief synthesis (3-5 paragraphs) that:
+1. Summarizes key findings from this round
+2. Highlights any critical issues identified by the critic
+3. Notes what has been accomplished
+4. Identifies what still needs clarification (if anything)
+
+Be concise but comprehensive."""
+
+        self.logger.agent_action("PI", f"Synthesizing Round {round_num} findings", indent=2)
+
+        round_synthesis = self.pi.run(round_summary_prompt, verbose=self.verbose)
+        self.round_syntheses.append(round_synthesis)
+
+        self.meeting_transcript.append({
+            "speaker": "PI",
+            "role": f"Round {round_num} Synthesis",
+            "content": round_synthesis
+        })
+
+        if self.verbose:
+            self.logger.result_summary(f"Round {round_num} PI Synthesis", round_synthesis, max_lines=8)
+
+        return round_synthesis, red_flags
+
     def run_meeting(self, num_rounds: int = 1) -> str:
-        """Run the subtask-centric Virtual Lab meeting.
+        """Run the subtask-centric Virtual Lab meeting with multi-round support.
 
         Args:
             num_rounds: Number of full research plan iterations (default: 1)
-                       Note: With sequential subtasks, 1 round is often sufficient
+                       Each round allows teams to refine their work based on
+                       previous findings and PI/Critic feedback
 
         Returns:
             Final synthesized answer from PI with red flags addressed
         """
-        if self.verbose:
-            print("\n" + "=" * 60)
-            print("STARTING SUBTASK-CENTRIC MEETING")
-            print("=" * 60)
+        self.logger.subsection("STARTING SUBTASK-CENTRIC VIRTUAL LAB")
 
-        # Phase 1: PI opens with research plan overview
-        if self.verbose:
-            print("\n[PHASE 1: PI Research Plan Overview]")
+        # Phase 1: PI opens with research plan overview (only once at start)
+        self.logger.subsection("PHASE 1: PI Research Plan Overview")
 
         plan_summary = "\n".join([
             f"{st['subtask_id']}. {st['description']} (Assigned: {', '.join(st['assigned_specialists'])})"
@@ -426,10 +681,12 @@ This is your last turn - make it count!"""
 **Research Plan:**
 {plan_summary}
 
+**Number of Rounds:** {num_rounds}
+
 Provide a brief opening (2-3 sentences) that:
 1. Frames the research question
 2. Outlines the subtask-based approach
-3. Sets expectations for sequential collaboration"""
+3. Explains that the team will iterate over {num_rounds} round(s) for thoroughness"""
 
         pi_intro = self.pi.run(pi_intro_prompt, verbose=self.verbose)
         self.meeting_transcript.append({
@@ -438,112 +695,73 @@ Provide a brief opening (2-3 sentences) that:
             "content": pi_intro
         })
 
-        # Phase 2: Execute research plan (sequential subtasks)
-        if self.verbose:
-            print("\n" + "=" * 60)
-            print("[PHASE 2: SEQUENTIAL SUBTASK EXECUTION]")
-            print("=" * 60)
+        # Phase 2: Multi-Round Execution
+        self.logger.subsection(f"PHASE 2: MULTI-ROUND RESEARCH EXECUTION ({num_rounds} rounds)")
 
-        for subtask in self.research_plan:
-            self._execute_subtask_sequential(subtask)
+        all_round_red_flags = []
 
-        # Phase 3: Critic review with Red Flag Checklist
-        if self.verbose:
-            print("\n" + "=" * 60)
-            print("[PHASE 3: CRITIC RED FLAG REVIEW]")
-            print("=" * 60)
+        for round_num in range(1, num_rounds + 1):
+            round_synthesis, red_flags = self._execute_single_round(round_num)
+            all_round_red_flags.extend(red_flags)
 
-        all_subtask_outputs = "\n\n".join([
-            f"=== SUBTASK {st_id} ===\n{output}"
-            for st_id, output in self.subtask_outputs.items()
-        ])
+            # Between rounds: check if continuation makes sense
+            if round_num < num_rounds:
+                critical_count = sum(1 for f in red_flags if f['severity'] == 'CRITICAL')
+                if critical_count == 0:
+                    self.logger.info(f"Round {round_num} completed with no critical issues", indent=2)
+                    self.logger.info(f"Proceeding to Round {round_num + 1} for refinement...", indent=2)
+                else:
+                    self.logger.warning(f"Round {round_num} has {critical_count} critical flags - teams will address in Round {round_num + 1}", indent=2)
 
-        critique_prompt = f"""Review all subtask outputs and generate a Red Flag Checklist.
+        # Phase 3: Final Synthesis Across All Rounds
+        self.logger.subsection("PHASE 3: FINAL SYNTHESIS ACROSS ALL ROUNDS")
 
-**Original Question:** {self.user_question}
+        # Build comprehensive context from all rounds
+        all_rounds_summary = []
+        for round_num in range(1, num_rounds + 1):
+            all_rounds_summary.append(f"\n### ROUND {round_num} ###")
 
-**All Subtask Outputs:**
-{all_subtask_outputs}
+            if round_num in self.round_outputs:
+                for subtask_id, output in sorted(self.round_outputs[round_num].items()):
+                    subtask = next((st for st in self.research_plan if st['subtask_id'] == subtask_id), None)
+                    if subtask:
+                        all_rounds_summary.append(
+                            f"\n**Subtask {subtask_id}: {subtask['description']}**\n{output}"
+                        )
 
-**Your Task:**
-Generate a structured Red Flag Checklist identifying CRITICAL flaws that MUST be fixed.
+            if round_num - 1 < len(self.round_syntheses):
+                all_rounds_summary.append(f"\n**PI Synthesis:**\n{self.round_syntheses[round_num - 1]}")
 
-Use this format for each flag:
+            if round_num - 1 < len(self.round_critiques):
+                all_rounds_summary.append(f"\n**Critic Review:**\n{self.round_critiques[round_num - 1]}")
 
-[CRITICAL/MODERATE/MINOR - Category]
-- Flag ID: XX-N
-- Issue: [Specific problem]
-- Location: [Which subtask/analysis]
-- Required Fix: [Exact action needed]
+        all_rounds_text = "\n\n".join(all_rounds_summary)
 
-Focus on:
-- Incorrect analyses
-- Missing critical steps
-- Unsupported claims
-- Data not properly examined
-- Files mentioned but not analyzed
-
-If work is sound, output: "No critical red flags detected."""
-
-        if self.verbose:
-            print("\n--- Scientific Critic Review ---")
-
-        critique = self.critic.run(critique_prompt, verbose=False)
-
-        self.meeting_transcript.append({
-            "speaker": "Critic",
-            "role": "Red Flag Checklist",
-            "content": critique
-        })
-
-        if self.verbose:
-            print(f"\nCritic Red Flags:\n{critique[:500]}...")
-
-        # Extract red flags
-        red_flags = self._extract_red_flags(critique)
-
-        if self.verbose:
-            print(f"\n[Extracted {len(red_flags)} red flags]")
-            for flag in red_flags:
-                print(f"  - [{flag['severity']}] {flag['flag_id']}: {flag['issue'][:60]}...")
-
-        # Phase 4: PI Final Synthesis WITH Red Flag Resolution
-        if self.verbose:
-            print("\n" + "=" * 60)
-            print("[PHASE 4: FINAL SYNTHESIS WITH RED FLAG RESOLUTION]")
-            print("=" * 60)
-
-        # Build full transcript
-        full_transcript = self._build_full_transcript()
-
-        # Build red flag requirements
+        # Consolidate red flags
+        critical_flags = [f for f in all_round_red_flags if f['severity'] == 'CRITICAL']
         red_flag_section = ""
-        if red_flags:
-            critical_flags = [f for f in red_flags if f['severity'] == 'CRITICAL']
-            if critical_flags:
-                red_flag_section = "\n\n**CRITICAL RED FLAGS TO ADDRESS:**\n"
-                for flag in critical_flags:
-                    red_flag_section += f"\n- [{flag['flag_id']}] {flag['issue']}\n  Required Fix: {flag['required_fix']}\n"
-                red_flag_section += "\n**YOU MUST** include a 'Red Flag Resolution' section addressing EVERY critical flag."
+        if critical_flags:
+            red_flag_section = "\n\n**REMAINING CRITICAL RED FLAGS TO ADDRESS:**\n"
+            for flag in critical_flags:
+                red_flag_section += f"\n- [{flag['flag_id']}] {flag['issue']}\n  Required Fix: {flag['required_fix']}\n"
+            red_flag_section += "\n**YOU MUST** address these in your final synthesis."
 
-        final_prompt = f"""Synthesize the team's findings into a final answer with Red Flag Resolution.
+        final_prompt = f"""Synthesize the team's findings across all {num_rounds} round(s) into a comprehensive final answer.
 
 **Original Question:** "{self.user_question}"
 
-**Research Plan Execution:**
-{full_transcript}
+**All Rounds Summary:**
+{all_rounds_text}
 
-**Critic's Red Flag Checklist:**
-{critique}
 {red_flag_section}
 
 **Your Task:**
 Provide a comprehensive final answer with these sections:
 
 1. **Executive Summary** - Direct answer to the research question
-2. **Key Findings** - Integrate insights from all subtasks
-3. **Red Flag Resolution** - Address EVERY critical red flag:
-   - For each flag: state what was done to resolve it
+2. **Key Findings** - Integrate insights from all rounds and subtasks
+3. **Red Flag Resolution** - Address any remaining critical red flags:
+   - For each flag: state what was done to resolve it across the rounds
    - If a fix requires additional analysis, acknowledge and propose next steps
    - If a flag is invalid, explain why
 4. **Evidence & Citations** - Preserve all citations, PMIDs, files, databases mentioned
@@ -552,7 +770,9 @@ Provide a comprehensive final answer with these sections:
 
 **CRITICAL REQUIREMENT:**
 The "Red Flag Resolution" section is MANDATORY if there are critical flags.
-If you do not address ALL critical flags, your synthesis is INCOMPLETE."""
+Synthesize across all {num_rounds} rounds to provide the most complete answer possible."""
+
+        self.logger.agent_action("PI", "Synthesizing final answer across all rounds", indent=2)
 
         final_answer = self.pi.run(final_prompt, verbose=self.verbose)
 
@@ -563,24 +783,30 @@ If you do not address ALL critical flags, your synthesis is INCOMPLETE."""
         })
 
         # Verify red flags were addressed
-        if red_flags:
-            critical_flags = [f for f in red_flags if f['severity'] == 'CRITICAL']
-            if critical_flags:
-                addressed_count = sum(
-                    1 for flag in critical_flags
-                    if flag['flag_id'] in final_answer or flag['issue'][:30] in final_answer
-                )
-                if self.verbose:
-                    print(f"\n[Red Flag Resolution: {addressed_count}/{len(critical_flags)} critical flags addressed]")
+        if critical_flags:
+            addressed_count = sum(
+                1 for flag in critical_flags
+                if flag['flag_id'] in final_answer or flag['issue'][:30] in final_answer
+            )
 
-                if addressed_count < len(critical_flags):
-                    # Add warning to final answer
-                    final_answer += f"\n\n⚠️ **WARNING:** Not all critical red flags were fully addressed ({addressed_count}/{len(critical_flags)}). Further iteration may be needed."
+            if addressed_count == len(critical_flags):
+                self.logger.success(f"Red Flag Resolution: All {len(critical_flags)} critical flags addressed", indent=2)
+            elif addressed_count > 0:
+                self.logger.warning(f"Red Flag Resolution: {addressed_count}/{len(critical_flags)} critical flags addressed", indent=2)
+            else:
+                self.logger.error(f"Red Flag Resolution: No critical flags addressed ({len(critical_flags)} pending)", indent=2)
+
+            if addressed_count < len(critical_flags):
+                final_answer += f"\n\n⚠️ **WARNING:** Not all critical red flags were fully addressed ({addressed_count}/{len(critical_flags)}). Further iteration may be needed."
 
         # Append references
+        self.logger.progress("Appending references section...", indent=2)
         final_answer_with_refs = self._append_references_section(final_answer)
 
+        self.logger.success(f"Virtual Lab meeting completed ({num_rounds} rounds)")
+
         return final_answer_with_refs
+
 
     def _format_team_list(self) -> str:
         """Format the team member list for prompts."""
@@ -689,7 +915,8 @@ def run_virtual_lab(
     max_team_size: int = 3,
     verbose: bool = False,
     data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
-    input_dir: Optional[str] = None
+    input_dir: Optional[str] = None,
+    max_iterations: int = 30
 ) -> str:
     """Run a subtask-centric Virtual Lab meeting.
 
@@ -703,6 +930,7 @@ def run_virtual_lab(
         verbose: Print detailed transcript
         data_dir: Path to database directory
         input_dir: Path to question-specific input data
+        max_iterations: Maximum iterations per agent (default: 30)
 
     Returns:
         Final synthesized answer with red flags addressed
@@ -724,7 +952,8 @@ def run_virtual_lab(
         max_team_size=max_team_size,
         verbose=verbose,
         data_dir=data_dir,
-        input_dir=input_dir
+        input_dir=input_dir,
+        max_iterations=max_iterations
     )
 
     final_answer = meeting.run_meeting(num_rounds=num_rounds)

@@ -1,6 +1,0 @@
-.env
-.env.*
-*.env
-*.pyc
-check_credit.py
-NEXT_SESSION.md

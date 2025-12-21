@@ -1,7 +1,7 @@
 requests==2.32.4
 python-dotenv==1.0.0
 pandas==2.1.1
-pyarrow==13.0.0
+pyarrow==14.0.1
 biopython==1.81
 pytest==7.4.3
 ipython==8.16.0
