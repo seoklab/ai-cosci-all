@@ -103,6 +103,7 @@ class VirtualLabMeeting:
         # 🆕 Add DS-Star Data Analyst to specialist pool if data analysis keywords detected
         if DSSTAR_AVAILABLE and self._needs_data_analysis():
             self.logger.progress("Adding DS-Star Data Analysis Specialist to team")
+
             dsstar_analyst = DataAnalystAgent(
                 api_key=api_key,
                 model=model,
@@ -115,11 +116,23 @@ class VirtualLabMeeting:
             self.logger.info(f"→ DS-Star specialist added (total: {len(self.specialists)} specialists)", indent=2)
             
             # Update research_plan to assign DS-Star to relevant subtasks
+            # Strategy: Check if subtask is PURELY computational or MIXED
             for subtask in self.research_plan:
-                if self._subtask_needs_data_analysis(subtask['description']):
-                    if dsstar_name not in subtask['assigned_specialists']:
-                        subtask['assigned_specialists'].append(dsstar_name)
-                        self.logger.info(f"→ DS-Star assigned to Subtask {subtask['subtask_id']}", indent=2)
+                needs_computation = self._subtask_needs_data_analysis(subtask['description'])
+                
+                if needs_computation:
+                    # Check if it's PURE computation or MIXED (computation + LLM analysis)
+                    is_pure_computation = self._is_pure_computational_task(subtask['description'])
+                    
+                    if is_pure_computation:
+                        # DS-Star works ALONE for pure computational tasks
+                        subtask['assigned_specialists'] = [dsstar_name]
+                        self.logger.info(f"→ DS-Star assigned to Subtask {subtask['subtask_id']} (solo execution - pure computation)", indent=2)
+                    else:
+                        # MIXED task: DS-Star joins the team but doesn't replace others
+                        if dsstar_name not in subtask['assigned_specialists']:
+                            subtask['assigned_specialists'].append(dsstar_name)
+                            self.logger.info(f"→ DS-Star added to Subtask {subtask['subtask_id']} team (collaboration mode)", indent=2)
 
         # Add the Scientific Critic
         self.critic = ScientificAgent(
@@ -1157,6 +1170,53 @@ Synthesize across all {num_rounds} rounds to provide the most complete answer po
         has_keyword = any(keyword in description_lower for keyword in analysis_keywords)
         
         return has_strong or has_keyword
+    
+    def _is_pure_computational_task(self, subtask_description: str) -> bool:
+        """
+        Determine if a subtask is PURELY computational (DS-Star solo)
+        vs. MIXED (computation + LLM analysis, DS-Star joins team).
+        
+        Pure computational tasks:
+        - Process TPM data, calculate correlation, compute similarity
+        - No LLM analysis, no literature review, no interpretation
+        
+        Mixed tasks:
+        - Generate LLM summaries + compute scores
+        - Analyze results + identify patterns
+        
+        Args:
+            subtask_description: The description of the subtask
+            
+        Returns:
+            True if PURE computation (DS-Star works alone)
+            False if MIXED (DS-Star collaborates with others)
+        """
+        description_lower = subtask_description.lower()
+        
+        # Keywords indicating LLM-based analysis (not pure computation)
+        llm_keywords = [
+            "llm-based", "llm-derived", "generate summaries", "functional summaries",
+            "phylogenetic tree", "literature", "interpret", "identify patterns",
+            "analyze results", "gene function", "biological significance",
+            "pathway analysis", "enrichment", "annotation"
+        ]
+        
+        # If any LLM keyword is present, it's a MIXED task
+        has_llm_component = any(keyword in description_lower for keyword in llm_keywords)
+        
+        if has_llm_component:
+            return False  # MIXED - DS-Star joins team
+        
+        # Check for pure computational indicators
+        pure_computation_keywords = [
+            "process tpm", "calculate expression", "compute correlation",
+            "calculate similarity", "gene-gene correlation", "pairwise",
+            "expression matrix", "normalize", "filter genes"
+        ]
+        
+        is_pure = any(keyword in description_lower for keyword in pure_computation_keywords)
+        
+        return is_pure
 
 
 def run_virtual_lab(
