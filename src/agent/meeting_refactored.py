@@ -9,6 +9,10 @@ from src.agent.team_manager_refactored import (
     create_pi_persona,
     create_critic_persona,
 )
+
+# DS-Star integration (optional)
+from src.agent.data_analyst import DataAnalystAgent
+DSSTAR_AVAILABLE = True
 from src.utils.logger import get_logger
 from src.utils.output_manager import get_current_run_dir
 
@@ -95,6 +99,27 @@ class VirtualLabMeeting:
             )
             for spec in team_specs
         }
+
+        # 🆕 Add DS-Star Data Analyst to specialist pool if data analysis keywords detected
+        if DSSTAR_AVAILABLE and self._needs_data_analysis():
+            self.logger.progress("Adding DS-Star Data Analysis Specialist to team")
+            dsstar_analyst = DataAnalystAgent(
+                api_key=api_key,
+                model=model,
+                provider=provider,
+                data_dir=data_dir,
+                input_dir=self.input_dir
+            )
+            dsstar_name = "Data Analysis Specialist (DS-Star)"
+            self.specialists[dsstar_name] = dsstar_analyst
+            self.logger.info(f"→ DS-Star specialist added (total: {len(self.specialists)} specialists)", indent=2)
+            
+            # Update research_plan to assign DS-Star to relevant subtasks
+            for subtask in self.research_plan:
+                if self._subtask_needs_data_analysis(subtask['description']):
+                    if dsstar_name not in subtask['assigned_specialists']:
+                        subtask['assigned_specialists'].append(dsstar_name)
+                        self.logger.info(f"→ DS-Star assigned to Subtask {subtask['subtask_id']}", indent=2)
 
         # Add the Scientific Critic
         self.critic = ScientificAgent(
@@ -1068,6 +1093,70 @@ Synthesize across all {num_rounds} rounds to provide the most complete answer po
             return final_answer + "\n" + "\n".join(references_parts)
         else:
             return final_answer
+
+    def _needs_data_analysis(self) -> bool:
+        """
+        Determine if the question requires data analysis using DS-Star.
+        
+        This is more robust than keyword matching - checks actual data availability.
+        
+        Returns:
+            True if DS-Star specialist should be added to team
+        """
+        # Check 1: Are there CSV files in input directory?
+        import os
+        from pathlib import Path
+        
+        if self.input_dir:
+            input_path = Path(self.input_dir)
+            if input_path.exists():
+                csv_files = list(input_path.glob("*.csv"))
+                if csv_files:
+                    self.logger.verbose(f"Found {len(csv_files)} CSV files → DS-Star applicable", indent=2)
+                    return True
+        
+        # Check 2: Keywords in question (fallback)
+        question_lower = self.user_question.lower()
+        data_keywords = [
+            "expression", "correlation", "similarity", "calculate",
+            "analyze", "csv", "data", "matrix", "clustering",
+            "pairwise", "statistical"
+        ]
+        
+        return any(keyword in question_lower for keyword in data_keywords)
+    
+    def _subtask_needs_data_analysis(self, subtask_description: str) -> bool:
+        """
+        Determine if a specific subtask requires DS-Star data analysis.
+        
+        More specific than _needs_data_analysis() - looks at subtask details.
+        
+        Args:
+            subtask_description: The description of the subtask
+            
+        Returns:
+            True if this subtask should use DS-Star
+        """
+        description_lower = subtask_description.lower()
+        
+        # Keywords indicating computational data analysis
+        analysis_keywords = [
+            "calculate", "compute", "expression", "correlation",
+            "similarity", "matrix", "statistical", "clustering",
+            "pairwise", "data processing", "quantitative",
+            "measurement", "score", "profiling", "csv"
+        ]
+        
+        # Strong indicators (must have one of these)
+        strong_indicators = [
+            "expression similarity", "correlation", "calculate",
+            "compute", "data profiling", "statistical"
+        ]
+        
+        has_strong = any(indicator in description_lower for indicator in strong_indicators)
+        has_keyword = any(keyword in description_lower for keyword in analysis_keywords)
+        
+        return has_strong or has_keyword
 
 
 def run_virtual_lab(

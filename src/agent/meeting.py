@@ -10,6 +10,10 @@ from src.agent.team_manager import (
     create_critic_persona,
 )
 
+from src.agent.data_analyst import DataAnalystAgent
+DSSTAR_AVAILABLE = True
+
+
 
 class VirtualLabMeeting:
     """Manages a Virtual Lab research meeting with multiple specialist agents.
@@ -33,7 +37,8 @@ class VirtualLabMeeting:
         max_team_size: int = 3,
         verbose: bool = False,
         data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
-        input_dir: Optional[str] = None
+        input_dir: Optional[str] = None,
+        use_dsstar: bool = True  # 🆕 Enable DS-Star data analyst
     ):
         """Initialize a Virtual Lab meeting.
 
@@ -97,6 +102,27 @@ class VirtualLabMeeting:
             )
             for spec in team_specs
         ]
+
+        # 🆕 Add DS-Star Data Analyst if enabled and needed
+        if use_dsstar and DSSTAR_AVAILABLE and self._needs_data_analysis():
+            if self.verbose:
+                print("\n[Adding DS-Star Data Analysis Specialist to team]")
+            
+            dsstar_analyst = DataAnalystAgent(
+                api_key=api_key,
+                model=model,
+                provider=provider,
+                data_dir=data_dir,
+                input_dir=self.input_dir
+            )
+            self.specialists.append(dsstar_analyst)
+            
+            if self.verbose:
+                print(f"  → DS-Star specialist added (total: {len(self.specialists)} specialists)")
+        elif use_dsstar and not DSSTAR_AVAILABLE:
+            if self.verbose:
+                print("\n[Warning: DS-Star requested but not available]")
+                print("  Install DS-Star in ext-tools/DS-Star to enable")
 
         # Add the Scientific Critic (static role)
         self.critic = ScientificAgent(
@@ -336,6 +362,38 @@ Structure your answer clearly with sections if needed."""
         """
         return self.meeting_transcript
 
+    def _needs_data_analysis(self) -> bool:
+        """
+        Determine if the question requires data analysis using DS-Star.
+        
+        This is more robust than keyword matching - checks actual data availability.
+        
+        Returns:
+            True if DS-Star specialist should be added to team
+        """
+        # Check 1: Are there CSV files in input directory?
+        import os
+        from pathlib import Path
+        
+        if self.input_dir:
+            input_path = Path(self.input_dir)
+            if input_path.exists():
+                csv_files = list(input_path.glob("*.csv"))
+                if csv_files:
+                    if self.verbose:
+                        print(f"[Found {len(csv_files)} CSV files → DS-Star applicable]")
+                    return True
+        
+        # Check 2: Keywords in question (fallback)
+        question_lower = self.user_question.lower()
+        data_keywords = [
+            "expression", "correlation", "similarity", "calculate",
+            "analyze", "csv", "data", "matrix", "clustering",
+            "pairwise", "statistical", "gene pairs"
+        ]
+        
+        return any(keyword in question_lower for keyword in data_keywords)
+    
     def _append_references_section(self, final_answer: str) -> str:
         """Extract and append a references section to the final answer.
         
@@ -404,7 +462,8 @@ def run_virtual_lab(
     max_team_size: int = 3,
     verbose: bool = False,
     data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
-    input_dir: Optional[str] = None
+    input_dir: Optional[str] = None,
+    use_dsstar: bool = True  # 🆕 Enable DS-Star data analyst
 ) -> str:
     """Convenience function to run a Virtual Lab meeting.
 
@@ -418,6 +477,7 @@ def run_virtual_lab(
         verbose: Print detailed transcript
         data_dir: Path to database directory (Drug databases, PPI, GWAS, etc.)
         input_dir: Path to question-specific input data (defaults to data_dir)
+        use_dsstar: Enable DS-Star Data Analysis Specialist (default: True)
 
     Returns:
         Final synthesized answer
@@ -441,7 +501,8 @@ def run_virtual_lab(
         max_team_size=max_team_size,
         verbose=verbose,
         data_dir=data_dir,
-        input_dir=input_dir
+        input_dir=input_dir,
+        use_dsstar=use_dsstar  # 🆕 Pass DS-Star flag
     )
 
     final_answer = meeting.run_meeting(num_rounds=num_rounds)
