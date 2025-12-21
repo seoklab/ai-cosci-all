@@ -148,6 +148,7 @@ class VirtualLabMeeting:
         if len(assigned) >= 2:
             self.logger.progress(f"Sub-meeting: {' & '.join(assigned)} collaborating...", indent=2)
             result = self._run_submeeting(subtask, dependency_context, assigned)
+            self.logger.verbose(f"Sub-meeting returned {len(result) if result else 0} chars", indent=2)
         else:
             # Single specialist execution
             specialist_title = assigned[0]
@@ -191,7 +192,7 @@ Use tools as needed. Be concise but thorough."""
 
             result = specialist.run(subtask_prompt, verbose=self.verbose)
 
-            self.logger.verbose(f"{specialist_title} completed subtask", indent=2)
+            self.logger.verbose(f"{specialist_title} completed subtask ({len(result) if result else 0} chars)", indent=2)
             if self.verbose:
                 self.logger.result_summary(f"{specialist_title} output", result, max_lines=5)
 
@@ -205,6 +206,9 @@ Use tools as needed. Be concise but thorough."""
 
         # Store outputs for this subtask
         self.subtask_outputs[subtask_id] = result
+        
+        # Debug log
+        self.logger.verbose(f"Stored subtask {subtask_id} output: {len(result) if result else 0} chars", indent=2)
 
         # If in multi-round mode, also store in round_outputs
         if self.current_round > 0:
