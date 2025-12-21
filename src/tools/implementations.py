@@ -20,10 +20,27 @@ from datetime import datetime
 # Allow nested event loops (needed for Paper-QA async calls)
 nest_asyncio.apply()
 
+# CRITICAL: Set LiteLLM callback limit BEFORE any imports
+# Default 30 is too low for multi-agent virtual lab
+os.environ["LITELLM_MAX_CALLBACKS"] = "100"
+
 # CRITICAL: Set environment variables at module level BEFORE any PaperQA imports
 # LiteLLM reads these at import time, not runtime!
 from dotenv import load_dotenv
 load_dotenv()  # Load .env file to get OPENROUTER_KEY
+
+# Import litellm early and disable callbacks to prevent MAX_CALLBACKS error
+try:
+    import litellm
+    # Disable all callbacks - they cause MAX_CALLBACKS errors in multi-agent systems
+    litellm.success_callback = []
+    litellm.failure_callback = []
+    litellm._async_success_callback = []
+    litellm._async_failure_callback = []
+    litellm.callbacks = []
+    print("✓ LiteLLM callbacks disabled to prevent MAX_CALLBACKS error", file=sys.stderr)
+except Exception as e:
+    print(f"⚠ Could not configure LiteLLM callbacks: {e}", file=sys.stderr)
 
 # Ensure OPENROUTER_KEY is available for PaperQA/LiteLLM
 # Note: LiteLLM expects OPENROUTER_KEY (not OPENROUTER_API_KEY) based on constants.py
@@ -39,12 +56,12 @@ _DOCS_CACHE: dict = {}
 
 def _get_metadata_file(paper_dir: Path) -> Path:
     """Get path to metadata CSV file for tracking downloaded papers."""
-    return paper_dir / "online_papers" / "metadata.csv"
+    return paper_dir / "metadata.csv"
 
 
 def _get_failed_downloads_file(paper_dir: Path) -> Path:
     """Get path to failed downloads JSON file."""
-    return paper_dir / "online_papers" / "failed_downloads.json"
+    return paper_dir / "failed_downloads.json"
 
 
 def _load_failed_downloads(failed_file: Path) -> list:
@@ -64,6 +81,25 @@ def _save_failed_download(failed_file: Path, entry: dict):
     
     # Load existing failures
     failed_downloads = _load_failed_downloads(failed_file)
+    
+    # Check for duplicates by identifier (DOI, ArXiv ID, or PMID)
+    identifiers = []
+    if entry.get('doi'):
+        identifiers.append(('doi', entry['doi']))
+    if entry.get('arxiv_id'):
+        identifiers.append(('arxiv_id', entry['arxiv_id']))
+    if entry.get('pmid'):
+        identifiers.append(('pmid', entry['pmid']))
+    
+    # Remove existing entry with same identifier
+    if identifiers:
+        failed_downloads = [
+            f for f in failed_downloads
+            if not any(
+                f.get(id_type) == id_value
+                for id_type, id_value in identifiers
+            )
+        ]
     
     # Add new failure
     entry['timestamp'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -129,7 +165,8 @@ def _load_metadata(metadata_file: Path) -> dict:
 def _save_metadata_entry(metadata_file: Path, entry: dict):
     """Save a new entry to metadata CSV.
     
-    Entry should contain: doi, arxiv_id, pmid, title, filename, source, download_date, manual
+    Entry should contain: doi, arxiv_id, pmid, title, author, journal, volume, page, year, 
+                         filename, source, download_date, manual
     """
     # Ensure directory exists
     metadata_file.parent.mkdir(parents=True, exist_ok=True)
@@ -137,13 +174,31 @@ def _save_metadata_entry(metadata_file: Path, entry: dict):
     # Check if file exists to determine if we need headers
     file_exists = metadata_file.exists()
     
-    fieldnames = ['doi', 'arxiv_id', 'pmid', 'title', 'filename', 'source', 'download_date', 'manual']
+    fieldnames = ['doi', 'arxiv_id', 'pmid', 'title', 'author', 'journal', 'volume', 'page', 'year', 
+                  'filename', 'source', 'download_date', 'manual']
+    
+    # Ensure all fields exist with defaults
+    full_entry = {
+        'doi': entry.get('doi', ''),
+        'arxiv_id': entry.get('arxiv_id', ''),
+        'pmid': entry.get('pmid', ''),
+        'title': entry.get('title', ''),
+        'author': entry.get('author', ''),
+        'journal': entry.get('journal', ''),
+        'volume': entry.get('volume', ''),
+        'page': entry.get('page', ''),
+        'year': entry.get('year', ''),
+        'filename': entry.get('filename', ''),
+        'source': entry.get('source', ''),
+        'download_date': entry.get('download_date', ''),
+        'manual': entry.get('manual', 'no')
+    }
     
     with open(metadata_file, 'a', encoding='utf-8', newline='') as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if not file_exists:
             writer.writeheader()
-        writer.writerow(entry)
+        writer.writerow(full_entry)
 
 
 def _get_pdf_url_from_unpaywall(doi: str) -> Optional[str]:
@@ -156,6 +211,9 @@ def _get_pdf_url_from_unpaywall(doi: str) -> Optional[str]:
         Direct PDF URL if found, None otherwise
     """
     try:
+        # Normalize DOI to lowercase (DOIs are case-insensitive, but APIs expect lowercase)
+        doi = doi.lower()
+        
         # Unpaywall API requires an email in the request
         email = os.getenv("UNPAYWALL_EMAIL", "research@example.com")
         unpaywall_url = f"https://api.unpaywall.org/v2/{doi}?email={email}"
@@ -298,6 +356,88 @@ def _clean_question_for_pubmed(question: str) -> str:
     return cleaned
 
 
+def _get_direct_pdf_url(initial_url: str, session) -> tuple[str, bytes]:
+    """Extract actual PDF URL from HTML landing page if needed.
+    
+    Many academic publishers return HTML pages with download buttons instead of
+    direct PDF links. This function:
+    1. Checks if URL already returns PDF
+    2. If HTML, parses meta tags for citation_pdf_url (academic standard)
+    3. Returns final PDF URL and content
+    
+    Args:
+        initial_url: URL to fetch (may be HTML landing page or direct PDF)
+        session: requests.Session object with headers already configured
+        
+    Returns:
+        Tuple of (final_pdf_url, pdf_content_bytes)
+        
+    Raises:
+        ValueError: If no PDF found
+        ImportError: If beautifulsoup4 not installed
+    """
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        raise ImportError("HTML parsing requires beautifulsoup4. Run: pip install beautifulsoup4")
+    
+    import sys
+    from urllib.parse import urljoin
+    
+    # 1. Initial request
+    response = session.get(initial_url, timeout=30, allow_redirects=True)
+    response.raise_for_status()
+    
+    content_type = response.headers.get("Content-Type", "").lower()
+    
+    # 2. Already PDF - return directly
+    if "application/pdf" in content_type or response.content.startswith(b"%PDF"):
+        return response.url, response.content
+    
+    # 3. HTML page - parse for PDF link
+    print(f"[INFO] HTML landing page detected, parsing for PDF link...", file=sys.stderr)
+    soup = BeautifulSoup(response.content, "html.parser")
+    
+    # Try multiple meta tag formats (different publishers use different standards)
+    pdf_url = None
+    
+    # Format 1: citation_pdf_url (HighWire/Google Scholar standard)
+    pdf_meta = soup.find("meta", {"name": "citation_pdf_url"})
+    if pdf_meta and pdf_meta.get("content"):
+        pdf_url = pdf_meta["content"]
+    
+    # Format 2: DC.identifier with PDF scheme
+    if not pdf_url:
+        pdf_meta = soup.find("meta", {"name": "DC.identifier", "scheme": "PDF"})
+        if pdf_meta and pdf_meta.get("content"):
+            pdf_url = pdf_meta["content"]
+    
+    # Format 3: bepress_citation_pdf_url (bepress/Berkeley standard)
+    if not pdf_url:
+        pdf_meta = soup.find("meta", {"name": "bepress_citation_pdf_url"})
+        if pdf_meta and pdf_meta.get("content"):
+            pdf_url = pdf_meta["content"]
+    
+    if not pdf_url:
+        raise ValueError(f"HTML page has no citation_pdf_url meta tag")
+    
+    print(f"[SUCCESS] Found PDF link in meta tags: {pdf_url}", file=sys.stderr)
+    
+    # Handle relative URLs
+    if not pdf_url.startswith("http"):
+        pdf_url = urljoin(response.url, pdf_url)
+        print(f"[INFO] Converted relative URL to: {pdf_url}", file=sys.stderr)
+    
+    # 4. Fetch actual PDF
+    pdf_response = session.get(pdf_url, timeout=30, allow_redirects=True)
+    pdf_response.raise_for_status()
+    
+    if not pdf_response.content.startswith(b"%PDF"):
+        raise ValueError(f"Meta tag URL did not return PDF")
+    
+    return pdf_url, pdf_response.content
+
+
 def _validate_pdf_file(pdf_path: Path) -> tuple[bool, str]:
     """Validate PDF file is complete and readable.
     
@@ -370,10 +510,25 @@ class PersistentPythonExecutor:
 
     def __init__(self):
         """Initialize the persistent Python environment."""
+        self._init_globals()
+        self.locals_dict = {}
+    
+    def _init_globals(self):
+        """Initialize globals with commonly used modules."""
+        import os
+        import sys
+        import pandas as pd
+        import numpy as np
+        
         self.globals_dict = {
             '__builtins__': __builtins__,
+            'os': os,
+            'sys': sys,
+            'pd': pd,
+            'pandas': pd,
+            'np': np,
+            'numpy': np,
         }
-        self.locals_dict = {}
 
     def execute(self, code: str, timeout: int = 30) -> tuple[bool, Optional[str], Optional[str]]:
         """Execute code in the persistent environment.
@@ -429,9 +584,7 @@ class PersistentPythonExecutor:
 
     def reset(self):
         """Reset the persistent environment (clears all variables)."""
-        self.globals_dict = {
-            '__builtins__': __builtins__,
-        }
+        self._init_globals()
         self.locals_dict = {}
 
 
@@ -1129,32 +1282,33 @@ def search_literature(
     question: str,
     mode: str = "auto",
     paper_dir: Optional[str] = None,
-    max_sources: int = 10
+    max_sources: int = 10,
+    cache_base_dir: Optional[str] = None
 ) -> ToolResult:
-    """Advanced literature search using PaperQA with local PDFs and/or internet search.
+    """Advanced literature search with per-question disk caching.
 
-    This tool provides deep literature analysis by:
-    - **PRIORITIZING** local PDF library (if available) 
-    - Searching online databases (PubMed, arXiv) only if local papers insufficient
-    - Reading full-text papers (not just abstracts)
-    - Generating cited, evidence-based answers
+    CACHING STRATEGY (PER-QUESTION):
+    - Each question gets its own cache directory: .paperqa_cache/question_<hash>/
+    - Contains: SearchIndex (local PDFs), downloaded papers, Docs object, metadata
+    - Persistent across restarts - cached embeddings are reused
+    - Significantly faster for repeated queries
 
-    Search Strategy (mode='auto', RECOMMENDED):
-    1. First queries local PDF library
-    2. If local papers provide good answer → returns immediately (faster, more focused)
-    3. If local papers insufficient → supplements with online search
-    
-    This ensures your curated local papers are always checked first!
+    WORKFLOW:
+    1. Generate hash from question → check cache directory
+    2. If cached: Load SearchIndex + Docs (FAST - no re-processing)
+    3. If new: Create cache, process papers (SLOW - first time only)
+    4. Add new papers, save cache for next time
 
     Args:
         question: Research question to answer (natural language)
         mode: Search mode:
             - 'auto' (default): Prioritize local, supplement with online if needed
-            - 'local': Only local PDFs
+            - 'local': Only local PDFs (uses SearchIndex)
             - 'online': Skip local, only internet search
-            - 'hybrid': Search both simultaneously (no prioritization)
+            - 'hybrid': Search both simultaneously
         paper_dir: Directory containing local PDF papers (uses config default if None)
-        max_sources: Maximum number of papers to download and analyze (default: 10)
+        max_sources: Maximum number of source contexts to retrieve (default: 10)
+        cache_base_dir: Base directory for caches (default: .paperqa_cache in cwd)
 
     Returns:
         ToolResult with:
@@ -1162,141 +1316,195 @@ def search_literature(
         - contexts: List of relevant text passages from papers
         - references: Bibliography of cited papers
         - sources_used: Information about which sources were queried
-
-    Note: More rigorous than search_pubmed as it reads full papers and synthesizes answers.
+        - cache_stats: Statistics about cache hits/misses
+        - cache_dir: Path to this question's cache directory
     """
     try:
-        # Lazy import to avoid loading PaperQA unless needed
+        # Suppress ALL pypdf warnings globally - must be before ANY imports
+        import warnings
+        import sys
+        
+        # Method 1: Filter all warnings from pypdf module
+        warnings.filterwarnings('ignore', category=UserWarning, module='pypdf')
+        warnings.filterwarnings('ignore', message='Ignoring wrong pointing object')
+        warnings.filterwarnings('ignore', message='.*wrong pointing object.*')
+        
+        # Method 2: Suppress specific pypdf logger
+        import logging
+        logging.getLogger('pypdf').setLevel(logging.ERROR)
+        logging.getLogger('pypdf._reader').setLevel(logging.ERROR)
+        
+        # CRITICAL: Disable LiteLLM callbacks BEFORE PaperQA import
+        # This prevents MAX_CALLBACKS errors in multi-agent systems
+        try:
+            import litellm
+            # Force-reset all callback lists
+            litellm.success_callback = []
+            litellm.failure_callback = []
+            litellm._async_success_callback = []
+            litellm._async_failure_callback = []
+            litellm.callbacks = []
+            
+            # Patch the callback manager to allow unlimited callbacks
+            if hasattr(litellm, 'integrations') and hasattr(litellm.integrations, 'logging_callback_manager'):
+                try:
+                    litellm.integrations.logging_callback_manager.MAX_CALLBACKS = 1000
+                    print("✓ LiteLLM MAX_CALLBACKS increased to 1000", file=sys.stderr)
+                except Exception:
+                    pass
+            
+            print("✓ LiteLLM callbacks disabled", file=sys.stderr)
+        except Exception as e:
+            print(f"⚠ Could not configure LiteLLM: {e}", file=sys.stderr)
+        
+        # Lazy imports
         from paperqa import Docs, Settings
-        from paperqa.settings import AnswerSettings
+        from paperqa.settings import AnswerSettings, ParsingSettings, IndexSettings
+        from paperqa.agents.search import get_directory_index
         from pathlib import Path
+        import hashlib
+        import asyncio
+        import json
+        import time
+        import pickle
 
         # Get configuration
         from src.config import get_global_config
         config = get_global_config()
 
-        # IMPORTANT: Check embedding config format
-        # PaperQA v5.x expects "st-model-name" for SentenceTransformer models
-        # NOT "sentence-transformers/model-name"
+        # Setup embedding config
         embedding_config = config.paperqa_embedding
-        
-        # Determine if using local embeddings based on "st-" prefix
         using_local_embeddings = embedding_config.startswith("st-")
 
-        # CRITICAL FIX: Explicitly set API keys in os.environ for LiteLLM
-        # LiteLLM checks os.environ at runtime, not just at import
-        # For OpenRouter models, LiteLLM uses OpenAI client with custom base_url
-        # The OpenAI client looks for OPENAI_API_KEY, so we must set it!
+        # Setup API keys
         if config.paperqa_llm.startswith("openrouter/"):
             api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_KEY")
             if not api_key:
                 return ToolResult(
-                    False,
-                    None,
+                    False, None,
                     "OPENROUTER_API_KEY not found. Set it in .env file or environment."
                 )
-            # Set all API key variants for maximum compatibility
             os.environ["OPENROUTER_API_KEY"] = api_key
             os.environ["OPENROUTER_KEY"] = api_key
-            # CRITICAL: For openrouter/ models, LiteLLM uses OpenAI client internally
-            # which expects OPENAI_API_KEY to be set!
             os.environ["OPENAI_API_KEY"] = api_key
-            print(f"[DEBUG] Set API keys in os.environ (OPENROUTER_API_KEY, OPENAI_API_KEY): {api_key[:15]}...", file=sys.stderr)
 
-        # For non-local embeddings, also need the API key
-        if not using_local_embeddings and embedding_config.startswith("openrouter/"):
-            api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENROUTER_KEY")
-            if not api_key:
+        # Verify dependencies
+        if using_local_embeddings:
+            try:
+                import sentence_transformers
+            except ImportError:
                 return ToolResult(
-                    False,
-                    None,
-                    "OPENROUTER_API_KEY needed for OpenRouter embeddings. Use local embeddings (st-model-name) to avoid API calls."
+                    False, None,
+                    "Local embeddings require sentence-transformers. "
+                    "Install with: pip install sentence-transformers"
                 )
-            os.environ["OPENROUTER_API_KEY"] = api_key
-            os.environ["OPENROUTER_KEY"] = api_key
 
         # Use provided paper_dir or fall back to config
         if paper_dir is None:
             paper_dir = config.paper_library_dir
-
         paper_dir_path = Path(paper_dir)
+
+        # ===================================================================
+        # SETUP CACHE DIRECTORY
+        # Priority: 1) CLI run cache (env var)  2) Question-specific cache
+        # ===================================================================
         
-        # Create online_papers subdirectory for downloaded papers
-        online_papers_dir = paper_dir_path / "online_papers"
-        online_papers_dir.mkdir(parents=True, exist_ok=True)
+        # Check if CLI set a run-specific cache directory
+        run_cache_dir = os.getenv("PAPERQA_RUN_CACHE_DIR")
+        
+        if run_cache_dir:
+            # Use CLI run cache - all questions in this execution share PDFs
+            cache_dir = Path(run_cache_dir)
+            print(f"[CACHE] Using CLI run cache: {cache_dir}", file=sys.stderr)
+            
+            # Track which questions used this cache
+            queries_file = cache_dir / "queries.jsonl"
+            query_log = {
+                "question": question,
+                "timestamp": time.time(),
+                "mode": mode,
+            }
+            with open(queries_file, 'a') as f:
+                f.write(json.dumps(query_log) + '\n')
+        else:
+            # Fallback: question-specific cache
+            question_hash = hashlib.md5(question.encode()).hexdigest()[:12]
+            
+            if cache_base_dir is None:
+                cache_base_dir = Path.cwd() / ".paperqa_cache"
+            else:
+                cache_base_dir = Path(cache_base_dir)
 
-        # Check if papers exist (only in online_papers directory)
-        # User indicated they won't use separate local papers
-        has_local_papers = online_papers_dir.exists() and any(online_papers_dir.glob("*.pdf"))
+            cache_dir = cache_base_dir / f"question_{question_hash}"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[CACHE] Using question-specific cache: {cache_dir}", file=sys.stderr)
 
-        # Adjust mode based on available resources
+            # Save question metadata
+            metadata_json_file = cache_dir / "metadata.json"
+            cache_metadata = {
+                "question": question,
+                "question_hash": question_hash,
+                "created_at": metadata_json_file.stat().st_ctime if metadata_json_file.exists() else time.time(),
+                "last_used": time.time(),
+                "settings": {
+                    "llm": config.paperqa_llm,
+                    "embedding": embedding_config,
+                }
+            }
+            
+            with open(metadata_json_file, 'w') as f:
+                json.dump(cache_metadata, f, indent=2)
+
+        # Cache directories
+        local_index_dir = cache_dir / "local_index"
+        online_papers_dir = cache_dir / "online_papers"
+        online_papers_dir.mkdir(exist_ok=True)
+
+        # Use online_papers as the paper directory for SearchIndex
+        # This way all downloaded PDFs are automatically indexed
+        paper_dir_path = online_papers_dir
+
+        # Check if local papers exist
+        has_local_papers = paper_dir_path.exists() and any(paper_dir_path.glob("**/*.pdf"))
+
+        # Adjust mode
         if mode == "local" and not has_local_papers:
             return ToolResult(
-                False,
-                None,
-                f"No papers found in {online_papers_dir}. Use mode='online' to download papers."
+                False, None,
+                f"No local papers found in {paper_dir}. Use mode='online' or add PDFs."
             )
 
         if mode == "auto":
-            if has_local_papers:
-                # Auto mode with papers: prioritize local, supplement with online if needed
-                actual_mode = "smart"
-            else:
-                # Auto mode with no papers: go online directly
-                actual_mode = "online"
+            actual_mode = "local_first" if has_local_papers else "online"
         else:
             actual_mode = mode
 
-        # embedding_config was already set earlier (before API key checks)
-        # No need to process it again here
-
-        # Debug: Print what we're actually using
         print(f"[DEBUG] PaperQA LLM: {config.paperqa_llm}", file=sys.stderr)
         print(f"[DEBUG] PaperQA Embedding: {embedding_config}", file=sys.stderr)
-        print(f"[DEBUG] Using local embeddings: {using_local_embeddings}", file=sys.stderr)
+        print(f"[DEBUG] Mode: {actual_mode}", file=sys.stderr)
 
-        # For local embeddings, verify sentence-transformers is installed
-        if using_local_embeddings:
-            try:
-                import sentence_transformers
-                print(f"[DEBUG] sentence-transformers version: {sentence_transformers.__version__}", file=sys.stderr)
-            except ImportError:
-                return ToolResult(
-                    False,
-                    None,
-                    "Local embeddings require sentence-transformers. Install with: pip install sentence-transformers"
-                )
-
-        # Create settings - LiteLLM will automatically use OPENROUTER_KEY from environment
-        # CRITICAL: Disable LLM usage during PDF parsing to avoid API calls
-        # The LLM will ONLY be used during the query phase (docs.aquery())
-        from paperqa.settings import ParsingSettings
-
-        # Determine if we should use LLM during parsing based on model tier
-        # For paid models, enable LLM for better document details extraction
-        # For free models, disable to avoid rate limits
+        # Create settings
         use_llm_during_parsing = ":free" not in config.paperqa_llm.lower()
 
         settings_kwargs = {
             "llm": config.paperqa_llm,
-            "summary_llm": config.paperqa_llm,  # Use same LLM for summaries
+            "summary_llm": config.paperqa_llm,
             "embedding": embedding_config,
             "parsing": ParsingSettings(
-                use_doc_details=use_llm_during_parsing,  # Enable LLM for document metadata extraction (paid models only)
+                use_doc_details=use_llm_during_parsing,
                 reader_config={
-                    "chunk_chars": 3000,  # Standard chunk size (in characters, not tokens)
-                    "overlap": 100  # Standard overlap
+                    "chunk_chars": 3000,
+                    "overlap": 100
                 },
-                multimodal=False,  # Disable image/figure processing for now
-                enrichment_llm=config.paperqa_llm,  # Use same LLM for enrichment (vision tasks)
+                multimodal=False,
+                enrichment_llm=config.paperqa_llm,
             )
         }
 
-        # Reduce token usage if using free model
         if ":free" in config.paperqa_llm.lower():
             settings_kwargs["answer"] = AnswerSettings(
-                answer_max_sources=min(max_sources, 3),  # Reduce sources for free models
-                evidence_k=5,  # Reduce evidence contexts
+                answer_max_sources=min(max_sources, 3),
+                evidence_k=5,
             )
         else:
             settings_kwargs["answer"] = AnswerSettings(
@@ -1305,267 +1513,223 @@ def search_literature(
             )
 
         settings = Settings(**settings_kwargs)
-        llm_status = "LLM enabled for metadata extraction" if settings.parsing.use_doc_details else "LLM disabled during PDF loading"
-        print(f"[DEBUG] Parsing config: use_doc_details={settings.parsing.use_doc_details} ({llm_status})", file=sys.stderr)
 
-        # Check cache for existing Docs instance (embedding reuse across queries)
-        # Cache key = (paper_dir, llm_model, embedding_model)
-        # This avoids expensive PDF re-parsing and re-embedding for repeated queries
-        cache_key = (str(paper_dir_path), config.paperqa_llm, embedding_config)
-        using_cached_docs = False
-        print(f"[DEBUG] Cache key: {cache_key}", file=sys.stderr)
-        print(f"[DEBUG] Cache has {len(_DOCS_CACHE)} entries", file=sys.stderr)
-        print(f"[DEBUG] Cache contains this key: {cache_key in _DOCS_CACHE}", file=sys.stderr)
-        if cache_key in _DOCS_CACHE:
-            print("[INFO] Reusing cached embeddings from previous queries", file=sys.stderr)
-            docs = _DOCS_CACHE[cache_key]
-            using_cached_docs = True
+        # ===================================================================
+        # LOAD OR CREATE DOCS OBJECT FOR THIS PAPER DIRECTORY
+        # ===================================================================
+        docs_cache_file = cache_dir / "docs_cache.pkl"
+
+        if docs_cache_file.exists():
+            try:
+                with open(docs_cache_file, 'rb') as f:
+                    docs = pickle.load(f)
+                print(f"[CACHE] Loaded cached Docs ({len(docs.docs)} papers)", file=sys.stderr)
+            except Exception as e:
+                print(f"[CACHE] Failed to load cache: {e}, creating new", file=sys.stderr)
+                docs = Docs()
         else:
-            print("[INFO] Creating new document collection (first time)", file=sys.stderr)
+            print("[CACHE] Creating new Docs object", file=sys.stderr)
             docs = Docs()
 
         sources_used = []
-        local_answer = None
-        should_supplement_online = False
+        cache_stats = {
+            "local_cached": 0,
+            "local_new": 0,
+            "online_cached": 0,
+            "online_new": 0
+        }
 
-        # STAGE 1: Load existing papers from online_papers directory
-        # Skip if using cached docs (already has PDFs loaded)
-        if actual_mode in ["local", "hybrid", "local_first", "smart"] and not using_cached_docs:
-            import time
-            pdf_count = 0
-            pdf_errors = []
-            # Only search in online_papers directory
-            for pdf_file in online_papers_dir.glob("*.pdf"):
-                # Validate PDF before attempting to load
-                is_valid, error_msg = _validate_pdf_file(pdf_file)
-                if not is_valid:
-                    print(f"[WARNING] Skipping corrupted PDF: {pdf_file.name}", file=sys.stderr)
-                    print(f"[WARNING] Reason: {error_msg}", file=sys.stderr)
-                    print(f"[WARNING] Deleting corrupted file: {pdf_file.name}", file=sys.stderr)
-                    try:
-                        pdf_file.unlink()  # Delete corrupted file
-                    except Exception as e:
-                        print(f"[ERROR] Failed to delete corrupted file: {e}", file=sys.stderr)
-                    pdf_errors.append(f"{pdf_file.name}: {error_msg} (deleted)")
-                    continue
-                
-                # Retry with exponential backoff for rate limit errors
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        print(f"[DEBUG] Loading PDF: {pdf_file.name}...", file=sys.stderr)
-                        # Provide a basic citation - LLM may be used for metadata extraction if use_doc_details=True
-                        simple_citation = f"{pdf_file.stem}, Local PDF"
-                        # Paper-QA v5+ uses async aadd instead of sync add
-                        asyncio.run(docs.aadd(str(pdf_file), citation=simple_citation, settings=settings))
-                        pdf_count += 1
-                        llm_used_msg = "with LLM metadata extraction" if settings.parsing.use_doc_details else "no LLM call"
-                        print(f"[DEBUG] Successfully loaded {pdf_file.name} ({llm_used_msg})", file=sys.stderr)
-                        break  # Success, move to next PDF
-                    except Exception as e:
-                        error_str = str(e).lower()
-                        # Detailed error logging
-                        print(f"[DEBUG] Error loading {pdf_file.name}: {str(e)}", file=sys.stderr)
-                        import traceback
-                        traceback.print_exc()
+        # Load metadata and failed downloads for online papers
+        metadata_file = _get_metadata_file(online_papers_dir)
+        existing_metadata = _load_metadata(metadata_file)
+        failed_file = _get_failed_downloads_file(online_papers_dir)
+        failed_downloads_list = _load_failed_downloads(failed_file)
 
-                        # Check if it's a rate limit error
-                        if "rate" in error_str or "429" in error_str:
-                            if attempt < max_retries - 1:
-                                # Exponential backoff: 2, 4, 8 seconds
-                                wait_time = 2 ** (attempt + 1)
-                                print(f"[DEBUG] Rate limit hit, retrying in {wait_time}s...", file=sys.stderr)
-                                time.sleep(wait_time)
-                                continue  # Retry
-                        # Non-rate-limit error or final retry failed
-                        # Include more error details for diagnosis
-                        error_msg = str(e)
-                        if "api_key" in error_str:
-                            error_msg = f"API key error: {error_msg}"
-                        pdf_errors.append(f"{pdf_file.name}: {error_msg}")
-                        break  # Don't retry non-rate-limit errors
+        # ===================================================================
+        # STAGE 1: Local Papers (via SearchIndex)
+        # ===================================================================
+        if actual_mode in ["local", "hybrid", "local_first"]:
+            if has_local_papers:
+                # Skip SearchIndex if we already have papers cached
+                # Rationale: docs.aquery() does semantic search at query time, so having
+                # 20-30 papers from related sub-questions is fine - it will find relevant content.
+                # SearchIndex is slow (10-20s) and only needed for initial embedding generation.
+                if len(docs.docs) > 0:
+                    print(f"[CACHE] Skipping SearchIndex (already have {len(docs.docs)} papers, docs.aquery will filter)", file=sys.stderr)
+                    cache_stats["local_cached"] = len(docs.docs)
+                    sources_used.append(f"local_library ({len(docs.docs)} cached)")
+                else:
+                    index_start_time = time.time()
+                    print(f"[CACHE] Building/loading SearchIndex for local papers", file=sys.stderr)
 
-            sources_used.append(f"local_library ({pdf_count} PDFs)")
-            
-            # Save to cache (only if loaded for the first time)
-            if cache_key not in _DOCS_CACHE and pdf_count > 0:
-                _DOCS_CACHE[cache_key] = docs
-                print(f"[INFO] Cached document collection for future queries", file=sys.stderr)
+                    # Suppress pypdf warnings about malformed PDFs
+                    import warnings
+                    warnings.filterwarnings('ignore', message='Ignoring wrong pointing object')
+                    warnings.filterwarnings('ignore', module='pypdf')
 
-            # Report errors if any PDFs failed to load
-            if pdf_errors and pdf_count == 0:
-                error_details = '\n'.join(pdf_errors[:3])
-                diagnosis = "\n\nDiagnosis:\n"
-                if any("api_key" in e.lower() for e in pdf_errors):
-                    diagnosis += "- API key not found by LiteLLM during PDF processing\n"
-                    diagnosis += f"- OPENROUTER_API_KEY in env: {bool(os.getenv('OPENROUTER_API_KEY'))}\n"
-                    diagnosis += f"- OPENROUTER_KEY in env: {bool(os.getenv('OPENROUTER_KEY'))}\n"
-                    diagnosis += f"- Using local embeddings: {using_local_embeddings}\n"
-                    if using_local_embeddings:
-                        diagnosis += "- Local embeddings should NOT require API key\n"
-                        diagnosis += "- This suggests PaperQA is making unexpected API calls\n"
-                        diagnosis += "- Try: pip install --upgrade paper-qa sentence-transformers\n"
-
-                return ToolResult(
-                    False,
-                    None,
-                    f"Failed to load any PDFs from {paper_dir}.\n\nErrors:\n{error_details}{diagnosis}"
-                )
-        
-        # If using cached docs, still need to set pdf_count for later logic
-        elif using_cached_docs and actual_mode in ["local", "hybrid", "local_first", "smart"]:
-            pdf_count = len(list(online_papers_dir.glob("*.pdf")))
-            sources_used.append(f"local_library ({pdf_count} PDFs, from cache)")
-        else:
-            pdf_count = 0
-            
-        # Query local papers (whether newly loaded or from cache)
-        if actual_mode in ["local", "hybrid", "local_first", "smart"] and (pdf_count > 0 or using_cached_docs):
-                try:
-                    print(f"[DEBUG] Querying with LLM: {settings.llm}", file=sys.stderr)
-                    print(f"[DEBUG] Querying with embedding: {settings.embedding}", file=sys.stderr)
-                    # Paper-QA v5+ uses async aquery instead of sync query
-                    local_answer = asyncio.run(docs.aquery(question, settings=settings))
-
-                    # Evaluate local answer quality for smart mode
-                    # WHAT IS A CONTEXT?
-                    # - Context = a relevant passage/chunk from a paper that was used to answer the question
-                    # - Each context represents evidence found in the papers (typically 200-500 words)
-                    # - More contexts = more evidence from papers = more comprehensive answer
-                    # - PaperQA retrieves multiple contexts and synthesizes them into an answer
-                    
-                    has_contexts = local_answer and local_answer.contexts and len(local_answer.contexts) > 0
-                    cannot_answer = "cannot answer" in local_answer.answer.lower() if local_answer else True
-                    
-                    # Quality criteria for HIGH QUALITY answer:
-                    # 1. contexts >= 3: Found evidence in multiple passages/papers (comprehensive)
-                    #    NOTE: This threshold is a heuristic and can be adjusted:
-                    #    - For broad topics, may want 5+ contexts
-                    #    - For narrow/specific topics, 2+ contexts may suffice
-                    #    - Current setting (3) is a balanced default for most scientific queries
-                    # 2. answer length >= 100 chars: Detailed explanation, not just a brief sentence
-                    # 3. no "cannot answer": Successfully found and synthesized information
-                    # 
-                    # WHY ANSWER LENGTH MATTERS:
-                    # - Short answers (<100 chars) are often incomplete or vague
-                    # - Longer answers indicate PaperQA found sufficient evidence to elaborate
-                    # - This is a simple heuristic but effective for filtering superficial responses
-                    # - Can be adjusted based on query complexity
-                    is_high_quality = (
-                        has_contexts
-                        and len(local_answer.contexts) >= 3  # Multiple evidence sources
-                        and len(local_answer.answer) >= 100  # Sufficiently detailed answer
-                        and not cannot_answer
+                    # Create non-LLM settings for indexing (avoid timeout)
+                    from paperqa.settings import ParsingSettings as PS
+                    index_settings_for_build = Settings(
+                        llm=config.paperqa_llm,
+                        summary_llm=config.paperqa_llm,
+                        embedding=embedding_config,
+                        parsing=PS(
+                            use_doc_details=False,  # CRITICAL: No LLM during indexing
+                            reader_config={
+                                "chunk_chars": 3000,
+                                "overlap": 100
+                            },
+                            multimodal=False,
+                        )
                     )
-                    
-                    # ACCEPTABLE quality (but might benefit from online supplement):
-                    # - At least 1 context found (some evidence)
-                    # - Can answer the question (not "cannot answer")
-                    # - But might be incomplete or lack depth
-                    is_acceptable_quality = (
-                        has_contexts
-                        and len(local_answer.contexts) >= 1
-                        and not cannot_answer
-                    )
-                    
-                    # Smart mode decision: evaluate quality and decide if online supplement needed
-                    if actual_mode == "smart":
-                        if is_high_quality:
-                            print("[INFO] Local answer is high quality - no online supplement needed", file=sys.stderr)
-                            should_supplement_online = False
-                        elif is_acceptable_quality:
-                            print("[INFO] Local answer is acceptable but could be improved - will supplement with online", file=sys.stderr)
-                            should_supplement_online = True
-                        else:
-                            print("[INFO] Local answer is insufficient - will supplement with online", file=sys.stderr)
-                            should_supplement_online = True
-                    
-                    # If local_first mode and we have a good answer, return it without online search
-                    if actual_mode == "local_first" and is_acceptable_quality:
-                        contexts = [
-                            {
-                                "text": ctx.context,
-                                "citation": ctx.text.name if hasattr(ctx.text, 'name') else "Unknown",
-                                "score": ctx.score if hasattr(ctx, 'score') else None
-                            }
-                            for ctx in local_answer.contexts
-                        ]
-                        
-                        return ToolResult(True, {
-                            "answer": local_answer.answer,
-                            "contexts": contexts,
-                            "references": local_answer.references if hasattr(local_answer, 'references') else [],
-                            "sources_used": sources_used + ["(local papers sufficient - skipped online search)"],
-                            "mode": "local"
-                        })
-                        
-                except Exception as e:
-                    # If local query fails, continue to online
-                    sources_used.append(f"(local query error: {str(e)[:50]})")
 
-        # STAGE 2: Add online search if needed
-        # Online search uses TWO sources in order of priority:
-        # 1. Semantic Scholar API - broad scientific coverage, good for general papers
-        # 2. PubMed/PMC - biomedical focus, only open access papers
-        # Both download full PDFs (not just abstracts) and add to document collection
-        # 
-        # Smart mode decision: should_supplement_online flag determines if online search runs
-        should_do_online = (
-            actual_mode in ["online", "hybrid", "local_first"]
-            or (actual_mode == "smart" and should_supplement_online)
-        )
+                    # Configure index settings
+                    index_settings = IndexSettings(
+                        paper_directory=str(paper_dir_path),
+                        index_directory=str(local_index_dir),
+                        sync_with_paper_directory=True,
+                    )
+                    index_settings_for_build.agent.index = index_settings
+
+                    # Build/load index with non-LLM settings
+                    async def build_index():
+                        return await get_directory_index(settings=index_settings_for_build, build=True)
+
+                    local_index = asyncio.run(build_index())
+                    index_elapsed = time.time() - index_start_time
+                    print(f"[CACHE] Index ready ({index_elapsed:.1f}s)", file=sys.stderr)
+
+                    # Query the index
+                    async def query_index():
+                        return await local_index.query(
+                            query=question,
+                            top_n=max_sources,
+                            field_subset=["title", "body", "file_location"]
+                        )
+
+                    local_results = asyncio.run(query_index())
+
+                    # Merge SearchIndex results into docs
+                    # Only add papers that aren't already in our cached docs
+                    for result_docs in local_results:
+                        for dockey, doc in result_docs.docs.items():
+                            if dockey not in docs.docs:
+                                # Directly add the doc and texts (already embedded by SearchIndex)
+                                docs.docs[dockey] = doc
+                                # Merge texts
+                                for text in result_docs.texts:
+                                    if text.doc.dockey == dockey:
+                                        docs.texts.append(text)
+                                cache_stats["local_new"] += 1
+                                print(f"[CACHE] Added new local paper: {doc.docname}", file=sys.stderr)
+                            else:
+                                cache_stats["local_cached"] += 1
+                                print(f"[CACHE] Using cached paper: {docs.docs[dockey].docname}", file=sys.stderr)
+
+                    if cache_stats["local_new"] + cache_stats["local_cached"] > 0:
+                        sources_used.append(
+                            f"local_library ({cache_stats['local_new']} new, "
+                            f"{cache_stats['local_cached']} cached)"
+                        )
+
+                # Try answering with local only
+                if actual_mode == "local_first" and docs.docs:
+                    try:
+                        local_answer = asyncio.run(docs.aquery(question, settings=settings))
+
+                        has_good_answer = (
+                            local_answer
+                            and local_answer.contexts
+                            and len(local_answer.contexts) > 0
+                            and "cannot answer" not in local_answer.answer.lower()
+                        )
+
+                        if has_good_answer:
+                            contexts = [
+                                {
+                                    "text": ctx.context,
+                                    "citation": ctx.text.name,
+                                    "score": ctx.score
+                                }
+                                for ctx in local_answer.contexts
+                            ]
+
+                            # Save cache before returning
+                            try:
+                                with open(docs_cache_file, 'wb') as f:
+                                    pickle.dump(docs, f)
+                            except Exception:
+                                pass
+
+                            return ToolResult(True, {
+                                "answer": local_answer.answer,
+                                "contexts": contexts,
+                                "references": local_answer.references,
+                                "sources_used": sources_used + ["(local sufficient)"],
+                                "mode": "local",
+                                "cache_stats": cache_stats,
+                                "cache_dir": str(cache_dir)
+                            })
+                    except Exception as e:
+                        sources_used.append(f"(local query error: {str(e)[:50]})")
+
+        # ===================================================================
+        # STAGE 2: Online Papers (simplified - just download)
+        # ===================================================================
+        should_do_online = actual_mode in ["online", "hybrid", "local_first"]
         
         if should_do_online:
             import requests
             import urllib.parse
-            import tempfile
-            import xml.etree.ElementTree as ET
-
-            total_papers_added = 0
+            from datetime import datetime
+            print("[INFO] Searching online databases...", file=sys.stderr)
             
-            # Load metadata to check for already downloaded papers
-            metadata_file = _get_metadata_file(online_papers_dir)
-            existing_metadata = _load_metadata(metadata_file)
-            
-            # Load failed downloads for retry
-            failed_file = _get_failed_downloads_file(online_papers_dir)
-            failed_downloads = _load_failed_downloads(failed_file)
-
-            # SOURCE 1: Semantic Scholar (general scientific papers)
-            # - Searches across all scientific disciplines
-            # - Returns papers with open access PDFs or arXiv links
-            # - Fast and comprehensive coverage
+            # Semantic Scholar search
             try:
                 s2_url = "https://api.semanticscholar.org/graph/v1/paper/search"
                 params = {
                     "query": question,
                     "limit": max_sources,
-                    "fields": "title,authors,year,abstract,openAccessPdf,externalIds,citationCount"
+                    "fields": "title,authors,year,abstract,openAccessPdf,externalIds,citationCount,venue,publicationVenue"
                 }
-
+                
                 headers = {}
                 if s2_api_key := os.getenv("SEMANTIC_SCHOLAR_API_KEY"):
                     headers["x-api-key"] = s2_api_key
-
-                response = requests.get(s2_url, params=params, headers=headers, timeout=30.0)
+                
+                response = requests.get(s2_url, params=params, headers=headers, timeout=30)
                 response.raise_for_status()
-                search_data = response.json()
-
-                papers_data = search_data.get("data", [])
-                s2_papers_added = 0
-
+                papers_data = response.json().get("data", [])
+                
+                print(f"[INFO] Semantic Scholar returned {len(papers_data)} papers", file=sys.stderr)
+                
                 for paper in papers_data[:max_sources]:
                     try:
-                        # Extract paper information
                         external_ids = paper.get("externalIds", {})
                         doi = external_ids.get("DOI", "")
                         arxiv_id = external_ids.get("ArXiv", "")
+                        pmid = external_ids.get("PubMed", "")
+                        pmcid = external_ids.get("PubMedCentral", "")
                         title = paper.get("title", "Unknown")
                         year = paper.get("year", "")
                         authors = paper.get("authors", [])
                         author_names = ", ".join([a.get("name", "") for a in authors[:3]])
                         if len(authors) > 3:
                             author_names += " et al."
+                        
+                        # Extract abstract (for fallback if PDF fails)
+                        abstract = paper.get("abstract", "")
+                        
+                        # Extract journal/venue information
+                        journal = paper.get("venue", "")
+                        pub_venue = paper.get("publicationVenue", {})
+                        if not journal and pub_venue:
+                            journal = pub_venue.get("name", "")
+                        
+                        # Note: Semantic Scholar doesn't provide volume/page in search API
+                        # Would need individual paper lookup for that
+                        volume = ""
+                        page = ""
                         
                         # Check if already in metadata
                         metadata_key = None
@@ -1580,95 +1744,181 @@ def search_literature(
                             local_pdf_path = online_papers_dir / cached_filename
                             
                             if local_pdf_path.exists():
-                                print(f"[INFO] Using cached paper from metadata: {cached_filename}", file=sys.stderr)
+                                print(f"[INFO] Using cached paper: {cached_filename}", file=sys.stderr)
                                 citation = f"{author_names}. {title}. {year}" if year else f"{author_names}. {title}"
                                 try:
                                     asyncio.run(docs.aadd(str(local_pdf_path), citation=citation, settings=settings))
-                                    s2_papers_added += 1
+                                    cache_stats["online_cached"] += 1
                                 except Exception as e:
                                     print(f"[WARNING] Failed to add cached paper: {e}", file=sys.stderr)
                                 continue
-                            else:
-                                print(f"[WARNING] Metadata exists but file missing: {cached_filename}", file=sys.stderr)
                         
-                        # Create filename with title
+                        # Create filename
                         identifier = doi if doi else (f"arxiv_{arxiv_id}" if arxiv_id else "unknown")
                         safe_filename = _create_safe_filename(title, identifier)
                         local_pdf_path = online_papers_dir / safe_filename
                         
-                        # Get PDF URL
-                        pdf_info = paper.get("openAccessPdf")
-                        if not pdf_info or not pdf_info.get("url"):
-                            if arxiv_id:
-                                pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-                            else:
-                                continue
-                        else:
-                            pdf_url = pdf_info["url"]
-                            
-                            # Handle DOI redirect URLs (not direct PDFs)
-                            if pdf_url.startswith("https://doi.org/") or pdf_url.startswith("http://dx.doi.org/"):
-                                print(f"[INFO] Semantic Scholar returned DOI redirect for: {title[:60]}...", file=sys.stderr)
+                        # Get PDF URL - PRIORITY: ArXiv > bioRxiv/medRxiv > OpenAccessPdf > Unpaywall
+                        pdf_url = None
+                        
+                        # PRIORITY 1: ArXiv (most reliable)
+                        if arxiv_id:
+                            pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+                            print(f"[INFO] Using ArXiv PDF: {arxiv_id}", file=sys.stderr)
+                        
+                        # PRIORITY 2: bioRxiv/medRxiv preprints (DOI starts with 10.1101/)
+                        elif doi and doi.startswith("10.1101/"):
+                            # bioRxiv/medRxiv DOI format: 10.1101/YYYY.MM.DD.NNNNNN
+                            # PDF URL: https://www.biorxiv.org/content/10.1101/YYYY.MM.DD.NNNNNNvN.full.pdf
+                            # Try without version first, then with v1
+                            pdf_url = f"https://www.biorxiv.org/content/{doi}.full.pdf"
+                            print(f"[INFO] Using bioRxiv/medRxiv PDF: {doi}", file=sys.stderr)
+                        
+                        # PRIORITY 3: PMC papers (PMC ID available)
+                        elif pmcid:
+                            # PMC OA Web Service
+                            print(f"[INFO] Found PMC ID, querying OA service: {pmcid}", file=sys.stderr)
+                            try:
+                                import xml.etree.ElementTree as ET_pmc
+                                oa_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id={pmcid}"
+                                oa_response = requests.get(oa_url, timeout=10)
+                                oa_response.raise_for_status()
+                                oa_root = ET_pmc.fromstring(oa_response.content)
                                 
-                                # Try ArXiv first if available
-                                if arxiv_id:
-                                    pdf_url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
-                                    print(f"[INFO] Using ArXiv instead: {pdf_url}", file=sys.stderr)
-                                # Try Unpaywall API to find real PDF URL
-                                elif doi:
-                                    print(f"[INFO] Trying Unpaywall API to find PDF URL...", file=sys.stderr)
-                                    unpaywall_pdf = _get_pdf_url_from_unpaywall(doi)
-                                    if unpaywall_pdf:
-                                        pdf_url = unpaywall_pdf
-                                        print(f"[SUCCESS] Found PDF via Unpaywall: {pdf_url}", file=sys.stderr)
+                                # Find PDF link
+                                pdf_link = None
+                                for link in oa_root.findall('.//link'):
+                                    if link.get('format') == 'pdf':
+                                        pdf_link = link.get('href')
+                                        break
+                                
+                                if pdf_link:
+                                    # Convert FTP to HTTPS (requests doesn't support FTP)
+                                    if pdf_link.startswith('ftp://'):
+                                        pdf_url = pdf_link.replace('ftp://', 'https://')
+                                        print(f"[INFO] Converted FTP to HTTPS: {pdf_url}", file=sys.stderr)
                                     else:
-                                        print(f"[WARNING] Unpaywall couldn't find open access PDF", file=sys.stderr)
-                                        # Keep DOI link for manual download prompt
-                                else:
-                                    # No DOI and no ArXiv - skip this paper
-                                    print(f"[WARNING] No alternative source found, skipping", file=sys.stderr)
-                                    continue
-
+                                        pdf_url = pdf_link
+                                    print(f"[SUCCESS] Found PMC PDF via OA service", file=sys.stderr)
+                            except Exception as e:
+                                print(f"[WARNING] PMC OA service failed: {e}", file=sys.stderr)
+                        
+                        # PRIORITY 4: OpenAccessPdf from Semantic Scholar
+                        if not pdf_url and paper.get("openAccessPdf") and paper["openAccessPdf"].get("url"):
+                            pdf_info_url = paper["openAccessPdf"]["url"]
+                            
+                            # Skip DOI redirects (not actual PDFs)
+                            if pdf_info_url.startswith("https://doi.org/") or pdf_info_url.startswith("http://dx.doi.org/"):
+                                print(f"[INFO] Semantic Scholar returned DOI redirect, trying Unpaywall...", file=sys.stderr)
+                                if doi:
+                                    pdf_url = _get_pdf_url_from_unpaywall(doi)
+                                    if pdf_url:
+                                        print(f"[SUCCESS] Found PDF via Unpaywall", file=sys.stderr)
+                            else:
+                                pdf_url = pdf_info_url
+                        
+                        # PRIORITY 5: Try Unpaywall with DOI
+                        if not pdf_url and doi:
+                            print(f"[INFO] No direct PDF, trying Unpaywall...", file=sys.stderr)
+                            pdf_url = _get_pdf_url_from_unpaywall(doi)
+                            if pdf_url:
+                                print(f"[SUCCESS] Found PDF via Unpaywall", file=sys.stderr)
+                        
+                        # No PDF source found
+                        if not pdf_url:
+                            print(f"[INFO] No open access PDF available: {title[:60]}...", file=sys.stderr)
+                            continue
+                        
                         citation = f"{author_names}. {title}. {year}" if year else f"{author_names}. {title}"
                         
-                        # Try to download PDF
-                        download_success = False
-                        manual_download = False
+                        # Download PDF with HTML parsing fallback
                         try:
-                            pdf_headers = {
+                            # Create session with comprehensive headers (mimics real browser)
+                            session = requests.Session()
+                            session.headers.update({
                                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                                "Accept": "application/pdf,application/octet-stream,*/*",
+                                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
                                 "Accept-Language": "en-US,en;q=0.9",
-                                "Accept-Encoding": "gzip, deflate",
-                                "Connection": "keep-alive",
-                                "Upgrade-Insecure-Requests": "1"
-                            }
-                            pdf_response = requests.get(pdf_url, headers=pdf_headers, timeout=60, allow_redirects=True)
-                            pdf_response.raise_for_status()
-
-                            # Save to local paper directory (validate after saving)
-                            with open(local_pdf_path, 'wb') as f:
-                                f.write(pdf_response.content)
+                                "Referer": "https://scholar.google.com/",  # Helps bypass bot detection
+                                "DNT": "1",
+                            })
                             
-                            # Validate the downloaded PDF (comprehensive check)
+                            print(f"[INFO] Downloading from: {pdf_url}", file=sys.stderr)
+                            
+                            # Try to get PDF, with HTML parsing fallback
+                            try:
+                                final_pdf_url, pdf_content = _get_direct_pdf_url(pdf_url, session)
+                            except ImportError:
+                                # beautifulsoup4 not installed - fall back to simple download
+                                print(f"[WARNING] beautifulsoup4 not installed, skipping HTML parsing", file=sys.stderr)
+                                pdf_response = session.get(pdf_url, timeout=60, allow_redirects=True)
+                                pdf_response.raise_for_status()
+                                
+                                # Check if HTML
+                                if "text/html" in pdf_response.headers.get("Content-Type", "").lower():
+                                    raise ValueError(f"URL returned HTML (install beautifulsoup4 for parsing: pip install beautifulsoup4)")
+                                
+                                if not pdf_response.content.startswith(b"%PDF"):
+                                    raise ValueError("Not a valid PDF file")
+                                
+                                final_pdf_url = pdf_response.url
+                                pdf_content = pdf_response.content
+                            
+                            # Final validation
+                            if not pdf_content.startswith(b"%PDF"):
+                                raise ValueError("Final content is not a valid PDF")
+                            
+                            # Save PDF
+                            with open(local_pdf_path, 'wb') as f:
+                                f.write(pdf_content)
+                            
+                            # Validate saved file
                             is_valid, error_msg = _validate_pdf_file(local_pdf_path)
                             if not is_valid:
-                                local_pdf_path.unlink()  # Delete invalid file
-                                raise ValueError(f"Downloaded file is corrupted: {error_msg}")
+                                local_pdf_path.unlink()
+                                raise ValueError(f"Corrupted PDF: {error_msg}")
                             
                             print(f"[SUCCESS] [Semantic Scholar] Downloaded: {safe_filename}", file=sys.stderr)
-                            download_success = True
                             
+                            # Add to docs
+                            try:
+                                asyncio.run(docs.aadd(str(local_pdf_path), citation=citation, settings=settings))
+                                cache_stats["online_new"] += 1
+                                
+                                # Save metadata
+                                metadata_entry = {
+                                    'doi': doi,
+                                    'arxiv_id': arxiv_id,
+                                    'pmid': '',
+                                    'title': title,
+                                    'author': author_names,
+                                    'journal': journal,
+                                    'volume': volume,
+                                    'page': page,
+                                    'year': str(year) if year else '',
+                                    'filename': safe_filename,
+                                    'source': 'semantic_scholar',
+                                    'download_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                    'manual': 'no',
+                                    'download_success': 'yes',
+                                    'content_type': 'pdf'
+                                }
+                                _save_metadata_entry(metadata_file, metadata_entry)
+                                
+                                # Remove from failed downloads if was previously failed
+                                if doi:
+                                    _remove_failed_download(failed_file, doi)
+                                elif arxiv_id:
+                                    _remove_failed_download(failed_file, arxiv_id)
+                                    
+                            except Exception as e:
+                                print(f"[ERROR] Failed to add paper: {e}", file=sys.stderr)
+                        
                         except Exception as e:
-                            print(f"\n[ERROR] [Semantic Scholar] Failed to download: {title}", file=sys.stderr)
+                            print(f"[ERROR] Failed to download: {title[:50]}", file=sys.stderr)
                             print(f"[ERROR] Reason: {str(e)}", file=sys.stderr)
-                            print(f"[INFO] URL: {pdf_url}", file=sys.stderr)
-                            if doi:
-                                print(f"[INFO] DOI: {doi}", file=sys.stderr)
-                            if arxiv_id:
-                                print(f"[INFO] ArXiv: {arxiv_id}", file=sys.stderr)
                             
-                            # Record failed download for later retry
+                            # Save to failed_downloads.json
                             failed_entry = {
                                 'url': pdf_url,
                                 'doi': doi or '',
@@ -1680,49 +1930,73 @@ def search_literature(
                                 'reason': str(e)
                             }
                             _save_failed_download(failed_file, failed_entry)
-                            print(f"[INFO] Recorded to failed_downloads.json for manual retry", file=sys.stderr)
-                            print(f"[INFO] Skipping this paper and continuing...", file=sys.stderr)
+                            print(f"[INFO] Recorded to failed_downloads.json", file=sys.stderr)
+                            
+                            # Add abstract as fallback if available
+                            if abstract and len(abstract.strip()) > 50:
+                                try:
+                                    print(f"[INFO] Adding abstract as fallback: {title[:50]}...", file=sys.stderr)
+                                    citation = f"{author_names}. {title}. {year}" if year else f"{author_names}. {title}"
+                                    
+                                    # Create temporary text file with abstract
+                                    import tempfile
+                                    abstract_content = f"TITLE: {title}\n\nAUTHORS: {author_names}\n\nYEAR: {year}\n\nABSTRACT:\n{abstract}"
+                                    
+                                    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+                                        f.write(abstract_content)
+                                        temp_path = f.name
+                                    
+                                    try:
+                                        # Add using aadd (works with text files)
+                                        asyncio.run(docs.aadd(
+                                            temp_path,
+                                            citation=citation + " (abstract only)",
+                                            settings=settings
+                                        ))
+                                        cache_stats["online_new"] += 1
+                                        print(f"[SUCCESS] Added abstract to knowledge base", file=sys.stderr)
+                                        
+                                        # Save metadata for abstract-only entry
+                                        metadata_entry = {
+                                            'doi': doi,
+                                            'arxiv_id': arxiv_id,
+                                            'pmid': '',
+                                            'title': title,
+                                            'author': author_names,
+                                            'journal': journal,
+                                            'volume': volume,
+                                            'page': page,
+                                            'year': str(year) if year else '',
+                                            'filename': 'abstract_only',
+                                            'source': 'semantic_scholar',
+                                            'download_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                            'manual': 'no',
+                                            'download_success': 'no',
+                                            'content_type': 'abstract_only'
+                                        }
+                                        _save_metadata_entry(metadata_file, metadata_entry)
+                                    finally:
+                                        # Clean up temp file
+                                        Path(temp_path).unlink(missing_ok=True)
+                                except Exception as abstract_error:
+                                    print(f"[WARNING] Failed to add abstract: {abstract_error}", file=sys.stderr)
+                            
                             continue
-                        
-                        # Add to docs and metadata if download successful
-                        if download_success and local_pdf_path.exists():
-                            try:
-                                asyncio.run(docs.aadd(str(local_pdf_path), citation=citation, settings=settings))
-                                s2_papers_added += 1
-                                
-                                # Save to metadata
-                                metadata_entry = {
-                                    'doi': doi,
-                                    'arxiv_id': arxiv_id,
-                                    'pmid': '',
-                                    'title': title,
-                                    'filename': safe_filename,
-                                    'source': 'semantic_scholar',
-                                    'download_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                    'manual': 'yes' if manual_download else 'no'
-                                }
-                                _save_metadata_entry(metadata_file, metadata_entry)
-                                print(f"[INFO] Added to metadata: {safe_filename}", file=sys.stderr)
-                                
-                                # Remove from failed downloads if it was previously failed
-                                if doi:
-                                    _remove_failed_download(failed_file, doi)
-                                elif arxiv_id:
-                                    _remove_failed_download(failed_file, arxiv_id)
-                                
-                            except Exception as e:
-                                print(f"[ERROR] Failed to add paper to collection: {e}", file=sys.stderr)
-
+                    
                     except Exception as e:
-                        print(f"[ERROR] Unexpected error processing paper: {e}", file=sys.stderr)
+                        print(f"[ERROR] Processing paper: {e}", file=sys.stderr)
                         continue
-
-                if s2_papers_added > 0:
-                    sources_used.append(f"semantic_scholar ({s2_papers_added} papers)")
-                    total_papers_added += s2_papers_added
-
+                
+                if cache_stats["online_new"] + cache_stats["online_cached"] > 0:
+                    sources_used.append(
+                        f"semantic_scholar ({cache_stats['online_new']} new, "
+                        f"{cache_stats['online_cached']} cached)"
+                    )
+                else:
+                    print("[WARNING] No papers downloaded from Semantic Scholar", file=sys.stderr)
+            
             except Exception as e:
-                print(f"[WARNING] Semantic Scholar search failed: {str(e)}", file=sys.stderr)
+                print(f"[ERROR] Semantic Scholar search failed: {e}", file=sys.stderr)
                 import traceback
                 traceback.print_exc(file=sys.stderr)
 
@@ -1733,6 +2007,9 @@ def search_literature(
             # - Excellent for biology, medicine, genetics, immunology topics
             print("[INFO] Trying PubMed/PMC search...", file=sys.stderr)
             try:
+                import urllib.parse
+                import xml.etree.ElementTree as ET
+                
                 search_term = urllib.parse.quote(question)
                 # Use retmax=50 to get more candidates, then filter to max_sources
                 search_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term={search_term}&retmode=json&retmax=50"
@@ -1745,9 +2022,54 @@ def search_literature(
                 pmids = search_data.get("esearchresult", {}).get("idlist", [])
                 print(f"[INFO] Found {len(pmids)} PubMed papers", file=sys.stderr)
                 pmc_papers_added = 0
+                
+                # Fetch abstracts for all PMIDs using efetch
+                pmid_abstracts = {}
+                if pmids:
+                    try:
+                        # Use efetch to get article details including abstracts
+                        fetch_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+                        fetch_params = {
+                            "db": "pubmed",
+                            "id": ",".join(pmids[:max_sources]),
+                            "retmode": "xml",
+                            "rettype": "abstract",
+                        }
+                        
+                        fetch_response = requests.get(fetch_url, params=fetch_params, timeout=30)
+                        fetch_response.raise_for_status()
+                        
+                        # Parse XML to extract abstracts
+                        fetch_root = ET.fromstring(fetch_response.content)
+                        
+                        for article_elem in fetch_root.findall(".//PubmedArticle"):
+                            # Get PMID
+                            pmid_elem = article_elem.find(".//PMID")
+                            if pmid_elem is not None:
+                                pmid_val = pmid_elem.text
+                                
+                                # Get abstract
+                                abstract_parts = []
+                                for abstract_text in article_elem.findall(".//AbstractText"):
+                                    label = abstract_text.get("Label", "")
+                                    text = abstract_text.text or ""
+                                    if label:
+                                        abstract_parts.append(f"{label}: {text}")
+                                    else:
+                                        abstract_parts.append(text)
+                                
+                                if abstract_parts:
+                                    pmid_abstracts[pmid_val] = " ".join(abstract_parts)
+                        
+                        print(f"[INFO] Retrieved abstracts for {len(pmid_abstracts)} papers", file=sys.stderr)
+                    except Exception as e:
+                        print(f"[WARNING] Failed to fetch abstracts: {e}", file=sys.stderr)
 
                 for pmid in pmids[:max_sources]:
                     try:
+                        # Get abstract for this PMID
+                        abstract = pmid_abstracts.get(pmid, '')
+                        
                         # Check if already in metadata
                         metadata_key = f"pmid:{pmid}"
                         if metadata_key in existing_metadata:
@@ -1756,7 +2078,7 @@ def search_literature(
                             local_pdf_path = online_papers_dir / cached_filename
                             
                             if local_pdf_path.exists():
-                                print(f"[INFO] Using cached paper from metadata: {cached_filename}", file=sys.stderr)
+                                print(f"[INFO] Using cached paper: {cached_filename}", file=sys.stderr)
                                 # Still need citation, get basic info
                                 try:
                                     details_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id={pmid}&retmode=json"
@@ -1771,7 +2093,7 @@ def search_literature(
                                     citation = f"{author_names}. {title}. PMID: {pmid}"
                                     
                                     asyncio.run(docs.aadd(str(local_pdf_path), citation=citation, settings=settings))
-                                    pmc_papers_added += 1
+                                    cache_stats["online_cached"] += 1
                                 except Exception as e:
                                     print(f"[WARNING] Failed to add cached paper: {e}", file=sys.stderr)
                                 continue
@@ -1784,208 +2106,396 @@ def search_literature(
                         pmc_data = pmc_response.json()
 
                         records = pmc_data.get("records", [])
-                        if records and records[0].get("pmcid"):
-                            pmcid = records[0]["pmcid"]
+                        if not records or not records[0].get("pmcid"):
+                            continue
+                        
+                        pmcid = records[0]["pmcid"]
 
-                            # Get paper details for citation
-                            details_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id={pmid}&retmode=json"
-                            details_response = requests.get(details_url, timeout=30)
-                            details_data = details_response.json()
+                        # Get paper details for citation and metadata
+                        details_url = f"https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id={pmid}&retmode=json"
+                        details_response = requests.get(details_url, timeout=30)
+                        details_data = details_response.json()
 
-                            paper_info = details_data.get("result", {}).get(pmid, {})
-                            title = paper_info.get("title", "Unknown")
-                            authors = paper_info.get("authors", [])
-                            author_names = ", ".join([a.get("name", "") for a in authors[:3]])
-                            if len(authors) > 3:
-                                author_names += " et al."
+                        paper_info = details_data.get("result", {}).get(pmid, {})
+                        title = paper_info.get("title", "Unknown")
+                        authors_list = paper_info.get("authors", [])
+                        author_names = ", ".join([a.get("name", "") for a in authors_list[:3]])
+                        if len(authors_list) > 3:
+                            author_names += " et al."
+                        
+                        # Extract journal, year, volume, page
+                        journal = paper_info.get("fulljournalname", "")
+                        pub_date = paper_info.get("pubdate", "")
+                        year = pub_date.split()[0] if pub_date else ""
+                        volume = paper_info.get("volume", "")
+                        pages = paper_info.get("pages", "")
+                        
+                        # Create filename with title
+                        identifier = f"PMID_{pmid}"
+                        safe_filename = _create_safe_filename(title, identifier)
+                        local_pdf_path = online_papers_dir / safe_filename
+
+                        # Use PMC OA Web Service to get actual PDF URL
+                        print(f"[INFO] Querying PMC OA service for {pmcid}...", file=sys.stderr)
+                        oa_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id={pmcid}"
+                        
+                        try:
+                            oa_response = requests.get(oa_url, timeout=10)
+                            oa_response.raise_for_status()
                             
-                            # Create filename with title
-                            identifier = f"PMID_{pmid}"
-                            safe_filename = _create_safe_filename(title, identifier)
-                            local_pdf_path = online_papers_dir / safe_filename
-
-                            # Use PMC OA Web Service to get actual PDF URL
-                            # Official API: https://www.ncbi.nlm.nih.gov/pmc/tools/oa-service/
-                            print(f"[INFO] Querying PMC OA service for {pmcid}...", file=sys.stderr)
-                            oa_url = f"https://www.ncbi.nlm.nih.gov/pmc/utils/oa/oa.fcgi?id={pmcid}"
+                            # Parse XML response to find PDF link
+                            oa_root = ET.fromstring(oa_response.content)
                             
-                            try:
-                                oa_response = requests.get(oa_url, timeout=10)
-                                oa_response.raise_for_status()
-                                
-                                # Parse XML response to find PDF link
-                                import xml.etree.ElementTree as ET_local
-                                oa_root = ET_local.fromstring(oa_response.content)
-                                
-                                # Find link with format="pdf"
-                                pdf_link = None
-                                for link in oa_root.findall('.//link'):
-                                    if link.get('format') == 'pdf':
-                                        pdf_link = link.get('href')
-                                        break
-                                
-                                if pdf_link:
-                                    pdf_url = pdf_link
-                                    print(f"[SUCCESS] Found PDF URL via OA service: {pdf_url}", file=sys.stderr)
+                            # Find link with format="pdf"
+                            pdf_link = None
+                            for link in oa_root.findall('.//link'):
+                                if link.get('format') == 'pdf':
+                                    pdf_link = link.get('href')
+                                    break
+                            
+                            if pdf_link:
+                                # Convert FTP to HTTPS (requests doesn't support FTP)
+                                if pdf_link.startswith('ftp://'):
+                                    pdf_url = pdf_link.replace('ftp://', 'https://')
+                                    print(f"[INFO] Converted FTP to HTTPS", file=sys.stderr)
                                 else:
-                                    # Fallback to old method
-                                    pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/"
-                                    print(f"[WARNING] No PDF link in OA service, using fallback URL", file=sys.stderr)
-                            except Exception as e:
-                                # Fallback to old method
-                                pdf_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/pdf/"
-                                print(f"[WARNING] OA service failed ({str(e)}), using fallback URL", file=sys.stderr)
+                                    pdf_url = pdf_link
+                                print(f"[SUCCESS] Found PDF URL via OA service: {pdf_url}", file=sys.stderr)
+                            else:
+                                # Fallback 1: Try direct PMC PDF URL (new format)
+                                fallback_url = f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/pdf/"
+                                print(f"[INFO] No PDF in OA response, trying US PMC fallback: {fallback_url}", file=sys.stderr)
+                                
+                                try:
+                                    test_response = requests.head(fallback_url, timeout=5, allow_redirects=True)
+                                    if test_response.status_code == 200:
+                                        pdf_url = test_response.url
+                                        print(f"[SUCCESS] US PMC fallback works", file=sys.stderr)
+                                    else:
+                                        raise ValueError(f"US PMC returned {test_response.status_code}")
+                                except Exception as e:
+                                    # Fallback 2: Try Europe PMC API
+                                    print(f"[INFO] US PMC failed ({e}), trying Europe PMC...", file=sys.stderr)
+                                    try:
+                                        # Europe PMC fullTextUrlList API
+                                        eupmc_url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmcid}/fullTextURLs?format=json"
+                                        eupmc_response = requests.get(eupmc_url, timeout=10)
+                                        eupmc_response.raise_for_status()
+                                        eupmc_data = eupmc_response.json()
+                                        
+                                        # Look for PDF link
+                                        pdf_found = False
+                                        for link in eupmc_data.get('fullTextUrlList', {}).get('fullTextUrl', []):
+                                            if link.get('documentStyle') == 'pdf' or link.get('documentStyle') == 'html':
+                                                eupmc_pdf_url = link.get('url')
+                                                if eupmc_pdf_url:
+                                                    pdf_url = eupmc_pdf_url
+                                                    pdf_found = True
+                                                    print(f"[SUCCESS] Found PDF via Europe PMC: {pdf_url}", file=sys.stderr)
+                                                    break
+                                        
+                                        if not pdf_found:
+                                            raise ValueError("No PDF link in Europe PMC response")
+                                    except Exception as eupmc_error:
+                                        print(f"[WARNING] Europe PMC also failed: {eupmc_error}", file=sys.stderr)
+                                        print(f"[INFO] Manual check: https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/", file=sys.stderr)
+                                        # Record to failed_downloads
+                                        failed_entry = {
+                                            'url': f"https://pmc.ncbi.nlm.nih.gov/articles/{pmcid}/",
+                                            'doi': '',
+                                            'arxiv_id': '',
+                                            'pmid': pmid,
+                                            'title': title,
+                                            'filename': safe_filename,
+                                            'source': 'pubmed_pmc',
+                                            'reason': f"All PMC sources failed - {str(eupmc_error)}"
+                                        }
+                                        _save_failed_download(failed_file, failed_entry)
+                                        print(f"[INFO] Recorded to failed_downloads.json", file=sys.stderr)
+                                        
+                                        # Add abstract as fallback if available
+                                        if abstract and len(abstract.strip()) > 50 and abstract != "N/A":
+                                            try:
+                                                print(f"[INFO] Adding PubMed abstract as fallback: {title[:50]}...", file=sys.stderr)
+                                                citation = f"{author_names}. {title}. PMID: {pmid}"
+                                                
+                                                # Create temporary text file with abstract
+                                                import tempfile
+                                                abstract_content = f"TITLE: {title}\n\nAUTHORS: {author_names}\n\nJOURNAL: {journal}\n\nYEAR: {year}\n\nPMID: {pmid}\n\nABSTRACT:\n{abstract}"
+                                                
+                                                with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+                                                    f.write(abstract_content)
+                                                    temp_path = f.name
+                                                
+                                                try:
+                                                    # Add using aadd
+                                                    asyncio.run(docs.aadd(
+                                                        temp_path,
+                                                        citation=citation + " (abstract only)",
+                                                        settings=settings
+                                                    ))
+                                                    cache_stats["online_new"] += 1
+                                                    print(f"[SUCCESS] Added PubMed abstract to knowledge base", file=sys.stderr)
+                                                    
+                                                    # Save metadata for abstract-only entry
+                                                    metadata_entry = {
+                                                        'doi': '',
+                                                        'arxiv_id': '',
+                                                        'pmid': pmid,
+                                                        'title': title,
+                                                        'author': author_names,
+                                                        'journal': journal,
+                                                        'volume': volume,
+                                                        'page': pages,
+                                                        'year': year,
+                                                        'filename': 'abstract_only',
+                                                        'source': 'pubmed_pmc',
+                                                        'download_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                                        'manual': 'no',
+                                                        'download_success': 'no',
+                                                        'content_type': 'abstract_only'
+                                                    }
+                                                    _save_metadata_entry(metadata_file, metadata_entry)
+                                                finally:
+                                                    # Clean up temp file
+                                                    Path(temp_path).unlink(missing_ok=True)
+                                            except Exception as abstract_error:
+                                                print(f"[WARNING] Failed to add abstract: {abstract_error}", file=sys.stderr)
+                                        
+                                        continue
+                        except Exception as e:
+                            # Skip - OA service failed
+                            print(f"[WARNING] PMC OA service failed for {pmcid}: {str(e)}", file=sys.stderr)
+                            continue
+                        
+                        citation = f"{author_names}. {title}. PMID: {pmid}"
+                        
+                        # Try to download PDF with HTML parsing fallback
+                        try:
+                            # Create session with PMC-optimized headers
+                            session = requests.Session()
+                            session.headers.update({
+                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                                "Accept-Language": "en-US,en;q=0.9",
+                                "Referer": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+                                "DNT": "1",
+                            })
                             
-                            citation = f"{author_names}. {title}. PMID: {pmid}"
+                            print(f"[INFO] Downloading PMC PDF from: {pdf_url}", file=sys.stderr)
                             
-                            # Try to download PDF
-                            download_success = False
-                            manual_download = False
+                            # Try to get PDF, with HTML parsing fallback
                             try:
-                                pdf_headers = {
-                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                                    "Accept": "application/pdf,*/*",
-                                    "Referer": f"https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/"
-                                }
-                                pdf_response = requests.get(pdf_url, headers=pdf_headers, timeout=60, allow_redirects=True)
+                                final_pdf_url, pdf_content = _get_direct_pdf_url(pdf_url, session)
+                            except ImportError:
+                                # beautifulsoup4 not installed - fall back to simple download
+                                print(f"[WARNING] beautifulsoup4 not installed, skipping HTML parsing", file=sys.stderr)
+                                pdf_response = session.get(pdf_url, timeout=60, allow_redirects=True)
                                 pdf_response.raise_for_status()
                                 
-                                # Debug info
-                                content_type = pdf_response.headers.get("Content-Type", "")
-                                content_length = len(pdf_response.content)
-                                print(f"[DEBUG] PMC response - Content-Type: {content_type}, Size: {content_length} bytes", file=sys.stderr)
-                                
-                                # Verify it's actually a PDF (PMC sometimes returns HTML)
-                                is_pdf = pdf_response.content.startswith(b"%PDF")
+                                # Check if HTML
                                 is_html = b"<html" in pdf_response.content[:1000].lower() or b"<!doctype" in pdf_response.content[:1000].lower()
-                                
                                 if is_html:
-                                    print(f"[DEBUG] PMC returned HTML instead of PDF. First 200 bytes: {repr(pdf_response.content[:200])}", file=sys.stderr)
-                                    raise ValueError(f"PMC returned HTML page, not PDF. The paper may require JavaScript or have access restrictions.")
+                                    raise ValueError(f"PMC returned HTML (install beautifulsoup4 for parsing)")
                                 
-                                if not is_pdf:
-                                    print(f"[DEBUG] Not a PDF. First 50 bytes: {repr(pdf_response.content[:50])}", file=sys.stderr)
-                                    raise ValueError(f"Not a valid PDF (Content-Type: {content_type}, starts with: {repr(pdf_response.content[:20])})")
+                                if not pdf_response.content.startswith(b"%PDF"):
+                                    raise ValueError(f"Not a valid PDF")
                                 
-                                # Save to local paper directory
-                                with open(local_pdf_path, 'wb') as f:
-                                    f.write(pdf_response.content)
+                                final_pdf_url = pdf_response.url
+                                pdf_content = pdf_response.content
+                            
+                            # Final validation
+                            if not pdf_content.startswith(b"%PDF"):
+                                raise ValueError("Final content is not a valid PDF")
+                            
+                            # Save to local paper directory
+                            with open(local_pdf_path, 'wb') as f:
+                                f.write(pdf_content)
+                            
+                            # Validate the downloaded PDF
+                            is_valid, error_msg = _validate_pdf_file(local_pdf_path)
+                            if not is_valid:
+                                local_pdf_path.unlink()
+                                raise ValueError(f"Corrupted PDF: {error_msg}")
+                            
+                            print(f"[SUCCESS] [PubMed/PMC] Downloaded: {safe_filename}", file=sys.stderr)
+                            
+                            # Add to docs
+                            try:
+                                asyncio.run(docs.aadd(str(local_pdf_path), citation=citation, settings=settings))
+                                cache_stats["online_new"] += 1
+                                pmc_papers_added += 1
                                 
-                                # Validate the downloaded PDF
-                                is_valid, error_msg = _validate_pdf_file(local_pdf_path)
-                                if not is_valid:
-                                    local_pdf_path.unlink()  # Delete invalid file
-                                    raise ValueError(f"Downloaded file is corrupted: {error_msg}")
-                                
-                                print(f"[SUCCESS] [PubMed/PMC] Downloaded: {safe_filename}", file=sys.stderr)
-                                download_success = True
-                                
-                            except Exception as e:
-                                error_type = type(e).__name__
-                                print(f"\n[ERROR] [PubMed/PMC] Failed to download ({error_type}): {title}", file=sys.stderr)
-                                print(f"[ERROR] Reason: {str(e)}", file=sys.stderr)
-                                print(f"[INFO] PMC URL: {pdf_url}", file=sys.stderr)
-                                print(f"[INFO] Alternative: https://www.ncbi.nlm.nih.gov/pmc/articles/{pmcid}/", file=sys.stderr)
-                                
-                                # Record failed download for later retry
-                                failed_entry = {
-                                    'url': pdf_url,
+                                # Save metadata
+                                metadata_entry = {
                                     'doi': '',
                                     'arxiv_id': '',
                                     'pmid': pmid,
                                     'title': title,
+                                    'author': author_names,
+                                    'journal': journal,
+                                    'volume': volume,
+                                    'page': pages,
+                                    'year': year,
                                     'filename': safe_filename,
                                     'source': 'pubmed_pmc',
-                                    'reason': str(e)
+                                    'download_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                    'manual': 'no',
+                                    'download_success': 'yes',
+                                    'content_type': 'pdf'
                                 }
-                                _save_failed_download(failed_file, failed_entry)
-                                print(f"[INFO] Recorded to failed_downloads.json for manual retry", file=sys.stderr)
-                                print(f"[INFO] Skipping this paper and continuing...", file=sys.stderr)
-                                continue
+                                _save_metadata_entry(metadata_file, metadata_entry)
+                                
+                                # Remove from failed downloads if it was previously failed
+                                _remove_failed_download(failed_file, pmid)
+                                
+                            except Exception as e:
+                                print(f"[ERROR] Failed to add paper: {e}", file=sys.stderr)
+                        
+                        except Exception as e:
+                            print(f"[ERROR] Failed to download: {title[:50]}", file=sys.stderr)
+                            print(f"[ERROR] Reason: {str(e)}", file=sys.stderr)
                             
-                            # Add to docs and metadata if download successful
-                            if download_success and local_pdf_path.exists():
+                            # Save to failed_downloads.json
+                            failed_entry = {
+                                'url': pdf_url,
+                                'doi': '',
+                                'arxiv_id': '',
+                                'pmid': pmid,
+                                'title': title,
+                                'filename': safe_filename,
+                                'source': 'pubmed_pmc',
+                                'reason': str(e)
+                            }
+                            _save_failed_download(failed_file, failed_entry)
+                            print(f"[INFO] Recorded to failed_downloads.json", file=sys.stderr)
+                            
+                            # Add abstract as fallback if available
+                            if abstract and len(abstract.strip()) > 50 and abstract != "N/A":
                                 try:
-                                    asyncio.run(docs.aadd(str(local_pdf_path), citation=citation, settings=settings))
-                                    pmc_papers_added += 1
+                                    print(f"[INFO] Adding PubMed abstract as fallback: {title[:50]}...", file=sys.stderr)
+                                    citation = f"{author_names}. {title}. PMID: {pmid}"
                                     
-                                    # Save to metadata
-                                    metadata_entry = {
-                                        'doi': '',
-                                        'arxiv_id': '',
-                                        'pmid': pmid,
-                                        'title': title,
-                                        'filename': safe_filename,
-                                        'source': 'pubmed_pmc',
-                                        'download_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                        'manual': 'yes' if manual_download else 'no'
-                                    }
-                                    _save_metadata_entry(metadata_file, metadata_entry)
-                                    print(f"[INFO] Added to metadata: {safe_filename}", file=sys.stderr)
+                                    # Create temporary text file with abstract
+                                    import tempfile
+                                    abstract_content = f"TITLE: {title}\n\nAUTHORS: {author_names}\n\nJOURNAL: {journal}\n\nYEAR: {year}\n\nPMID: {pmid}\n\nABSTRACT:\n{abstract}"
                                     
-                                    # Remove from failed downloads if it was previously failed
-                                    _remove_failed_download(failed_file, pmid)
+                                    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+                                        f.write(abstract_content)
+                                        temp_path = f.name
                                     
-                                except Exception as e:
-                                    print(f"[ERROR] Failed to add paper to collection: {e}", file=sys.stderr)
+                                    try:
+                                        # Add using aadd
+                                        asyncio.run(docs.aadd(
+                                            temp_path,
+                                            citation=citation + " (abstract only)",
+                                            settings=settings
+                                        ))
+                                        cache_stats["online_new"] += 1
+                                        print(f"[SUCCESS] Added PubMed abstract to knowledge base", file=sys.stderr)
+                                        
+                                        # Save metadata for abstract-only entry
+                                        metadata_entry = {
+                                            'doi': '',
+                                            'arxiv_id': '',
+                                            'pmid': pmid,
+                                            'title': title,
+                                            'author': author_names,
+                                            'journal': journal,
+                                            'volume': volume,
+                                            'page': pages,
+                                            'year': year,
+                                            'filename': 'abstract_only',
+                                            'source': 'pubmed_pmc',
+                                            'download_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                            'manual': 'no',
+                                            'download_success': 'no',
+                                            'content_type': 'abstract_only'
+                                        }
+                                        _save_metadata_entry(metadata_file, metadata_entry)
+                                    finally:
+                                        # Clean up temp file
+                                        Path(temp_path).unlink(missing_ok=True)
+                                except Exception as abstract_error:
+                                    print(f"[WARNING] Failed to add abstract: {abstract_error}", file=sys.stderr)
+                            
+                            continue
 
                     except Exception as e:
-                        print(f"[ERROR] Unexpected error processing PMID {pmid}: {e}", file=sys.stderr)
+                        print(f"[ERROR] Processing PMID {pmid}: {e}", file=sys.stderr)
                         continue
 
                 if pmc_papers_added > 0:
                     sources_used.append(f"pubmed_pmc ({pmc_papers_added} papers)")
-                    total_papers_added += pmc_papers_added
+                    print(f"[INFO] Downloaded {pmc_papers_added} papers from PubMed/PMC", file=sys.stderr)
+                else:
+                    print("[WARNING] No papers downloaded from PubMed/PMC", file=sys.stderr)
 
             except Exception as e:
                 print(f"[WARNING] PubMed/PMC search failed: {str(e)}", file=sys.stderr)
                 import traceback
                 traceback.print_exc(file=sys.stderr)
 
-        # Query the combined document collection
-        # Paper-QA v5+ uses async aquery instead of sync query
+        # ===================================================================
+        # NOTE: Online papers are already usable via docs.aadd() above
+        # Embeddings are saved to docs_cache.pkl (line ~2030) and will be
+        # reloaded on next run (line ~1370), so no re-embedding needed.
+        # SearchIndex update removed to avoid timeout errors.
+        # ===================================================================
+
+        # ===================================================================
+        # FINAL QUERY
+        # ===================================================================
         answer_obj = asyncio.run(docs.aquery(question, settings=settings))
 
-        # Extract contexts and references
         contexts = [
             {
                 "text": ctx.context,
-                "citation": ctx.text.name if hasattr(ctx.text, 'name') else "Unknown",
-                "score": ctx.score if hasattr(ctx, 'score') else None
+                "citation": ctx.text.name,
+                "score": ctx.score
             }
             for ctx in answer_obj.contexts
         ]
+
+        # ===================================================================
+        # SAVE CACHE
+        # ===================================================================
+        try:
+            with open(docs_cache_file, 'wb') as f:
+                pickle.dump(docs, f)
+            print(f"[CACHE] Saved cache ({len(docs.docs)} papers)", file=sys.stderr)
+        except Exception as e:
+            print(f"[WARNING] Failed to save cache: {e}", file=sys.stderr)
+
+        print(f"[CACHE] Cache directory: {cache_dir}", file=sys.stderr)
         
-        # Check if there were failed downloads and notify user
-        failed_downloads = _load_failed_downloads(failed_file) if should_do_online else []
-        if failed_downloads:
-            failed_count = len(failed_downloads)
+        # Check failed downloads
+        failed_downloads_list = _load_failed_downloads(failed_file) if should_do_online else []
+        if failed_downloads_list:
+            failed_count = len(failed_downloads_list)
             print(f"\n{'='*80}", file=sys.stderr)
-            print(f"[NOTICE] {failed_count} paper(s) failed to download automatically", file=sys.stderr)
+            print(f"[NOTICE] {failed_count} paper(s) failed to download", file=sys.stderr)
             print(f"[NOTICE] Details saved to: {failed_file}", file=sys.stderr)
-            print(f"[NOTICE] To manually download:", file=sys.stderr)
-            print(f"[NOTICE]   1. Open failed_downloads.json", file=sys.stderr)
-            print(f"[NOTICE]   2. Download PDFs from the 'url' field", file=sys.stderr)
-            print(f"[NOTICE]   3. Save to the 'filename' path in online_papers/", file=sys.stderr)
-            print(f"[NOTICE]   4. Run search_literature again - it will auto-load the new files", file=sys.stderr)
+            print(f"[NOTICE] You can manually download and place them in {online_papers_dir}", file=sys.stderr)
             print(f"{'='*80}\n", file=sys.stderr)
 
         return ToolResult(True, {
             "answer": answer_obj.answer,
             "contexts": contexts,
-            "references": answer_obj.references if hasattr(answer_obj, 'references') else [],
+            "references": answer_obj.references,
             "sources_used": sources_used,
             "mode": actual_mode,
-            "failed_downloads": len(failed_downloads) if failed_downloads else 0
+            "cache_stats": cache_stats,
+            "total_papers_cached": len(docs.docs),
+            "cache_dir": str(cache_dir),
+            "failed_downloads": len(failed_downloads_list) if failed_downloads_list else 0
         })
 
-    except ImportError as e:
-        return ToolResult(
-            False,
-            None,
-            "PaperQA not installed. Run: pip install paper-qa"
-        )
+    except ImportError:
+        return ToolResult(False, None, "PaperQA not installed. Run: pip install paper-qa")
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return ToolResult(False, None, f"Literature search error: {str(e)}")
 
 
