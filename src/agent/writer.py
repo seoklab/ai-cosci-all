@@ -19,10 +19,6 @@ from src.agent.openrouter_client import OpenRouterClient
 from src.agent.anthropic_client import AnthropicClient
 from src.tools.implementations import search_literature, search_pubmed
 
-from src.tools.implementations_cached import (
-    search_literature_cached as search_literature,
-)
-
 
 @dataclass
 class Citation:
