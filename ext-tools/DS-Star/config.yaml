@@ -10,7 +10,7 @@ interactive: false
 max_refinement_rounds: 5 
 auto_debug: true
 debug_attempts: 3  
-execution_timeout: 1800
+execution_timeout: 300 # 5 minutes
 preserve_artifacts: true
 
 agent_models:
@@ -19,5 +19,5 @@ agent_models:
   CODER: "openrouter/anthropic/claude-3.5-sonnet"
   VERIFIER: "openrouter/openai/gpt-4-turbo"
   ROUTER: "openrouter/anthropic/claude-3.5-sonnet"
-  DEBUGGER: "openrouter/qwen/qwen-2.5-coder-32b-instruct"
+  DEBUGGER: openrouter/anthropic/claude-3.5-sonnet 
   FINALYZER: "openrouter/anthropic/claude-3.5-sonnet"
