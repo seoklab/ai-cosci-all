@@ -213,7 +213,7 @@ class DataAnalystAgent(ScientificAgent):
             return False
     
     def _run_dsstar_analysis(self, question: str, verbose: bool) -> str:
-        """Execute DS-Star pipeline for data analysis.
+        """Execute DS-Star pipeline via subprocess.
         
         Args:
             question: Analysis question
@@ -222,56 +222,108 @@ class DataAnalystAgent(ScientificAgent):
         Returns:
             Formatted analysis result
         """
-        self.logger.progress(f"[{self.persona.title}] Starting DS-Star pipeline...")
+        self.logger.progress(f"[{self.persona.title}] Starting DS-Star subprocess...")
         
         try:
+            import subprocess
+            import shutil
+            
+            # Discover CSV files
             self.logger.info(f"Discovering CSV files in: {self.input_dir}", indent=2)
             data_files = self._discover_data_files()
             
             if not data_files:
-                error_msg = (
-                    f"[{self.persona.title}] No CSV files found in {self.input_dir}. "
-                    "DS-Star requires CSV data files for analysis."
-                )
+                error_msg = f"[{self.persona.title}] No CSV files found in {self.input_dir}"
                 self.logger.error(error_msg, indent=2)
                 return error_msg
             
-            self.logger.success(f"Found {len(data_files)} CSV files: {[f.name for f in data_files]}", indent=2)
+            self.logger.success(f"Found {len(data_files)} CSV files", indent=2)
             
-            self.logger.progress("Creating DS-Star agent with isolated runs_dir...", indent=2)
-            dsstar_agent = self.create_dsstar_agent()
+            # Create config for subprocess
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            run_id = f"dsstar_{timestamp}"
             
-            self.logger.info(f"DS-Star will read data from: {dsstar_agent.config.data_dir}", indent=2)
-            self.logger.info(f"DS-Star will save results to: {dsstar_agent.config.runs_dir}", indent=2)
+            project_root = Path(__file__).parent.parent.parent
+            runs_dir = project_root / "outputs" / "dsstar_runs" / run_id
+            runs_dir.mkdir(parents=True, exist_ok=True)
             
-            absolute_data_files = [str(f.resolve()) for f in data_files]
+            config_data = dict(self.dsstar_base_config)
+            config_data.update({
+                'run_id': run_id,
+                'runs_dir': str(runs_dir),
+                'data_dir': str(Path(self.input_dir).resolve()),
+                'query': question,
+                'data_files': [f.name for f in data_files],
+                'interactive': False,
+                'preserve_artifacts': True
+            })
             
-            self.logger.progress("Executing DS-Star run_pipeline()...", indent=2)
-            self.logger.verbose(f"Data files: {[f.name for f in data_files]}", indent=4)
-            result = dsstar_agent.run_pipeline(
-                query=question,
-                data_files=absolute_data_files
+            config_path = runs_dir / f"config_{timestamp}.yaml"
+            with open(config_path, 'w') as f:
+                yaml.dump(config_data, f, default_flow_style=False, sort_keys=False)
+            
+            self.logger.info(f"Config saved: {config_path}", indent=2)
+            self.logger.verbose(f"  - Data dir: {config_data['data_dir']}", indent=2)
+            self.logger.verbose(f"  - Runs dir: {config_data['runs_dir']}", indent=2)
+            self.logger.verbose(f"  - Data files: {len(config_data['data_files'])} files", indent=2)
+            self.logger.verbose(f"  - Max refinement rounds: {config_data.get('max_refinement_rounds', 'N/A')}", indent=2)
+            self.logger.verbose(f"  - Debug attempts: {config_data.get('debug_attempts', 'N/A')}", indent=2)
+            self.logger.verbose(f"  - Agent models: {len(config_data.get('agent_models', {}))}", indent=2)
+            self.logger.progress("Launching DS-Star subprocess...", indent=2)
+            
+            # Execute subprocess
+            result = subprocess.run(
+                [sys.executable, "dsstar.py", "--config", str(config_path)],
+                cwd=str(DSSTAR_PATH),
+                capture_output=True,
+                text=True,
+                timeout=3600
             )
             
-            formatted_result = self._format_dsstar_result(result)
-            self.logger.success(f"[{self.persona.title}] DS-Star analysis complete!", indent=2)
+            if result.returncode != 0:
+                self.logger.error(f"DS-Star failed: {result.stderr[:200]}", indent=2)
+                return super().run(question, verbose)
             
-            return formatted_result
+            self.logger.success("DS-Star completed", indent=2)
             
-        except Exception as e:
-            error_trace = traceback.format_exc()
-            error_msg = (
-                f"[{self.persona.title}] DS-Star analysis encountered an error:\n"
-                f"Error: {str(e)}\n"
-                f"Traceback:\n{error_trace}\n\n"
-                "Falling back to standard tool-based analysis..."
-            )
+            # Collect results
+            output_dir = runs_dir / run_id / "final_output"
+            output_files = {}
+            if output_dir.exists():
+                for f in output_dir.glob("*"):
+                    if f.is_file():
+                        output_files[f.stem] = str(f)
             
-            self.logger.error(error_msg, indent=2)
-            print(error_msg)
+            # Format result
+            parts = [f"[{self.persona.title} - DS-Star Subprocess]", "", f"Run: {run_id}"]
+            if output_files:
+                parts.append("Files:")
+                for name, path in output_files.items():
+                    parts.append(f"- {Path(path).name}")
             
+            # Try to read result
+            result_file = output_files.get('result')
+            if result_file and Path(result_file).exists():
+                with open(result_file) as f:
+                    content = f.read().strip()
+                    if len(content) > 2000:
+                        parts.append("")
+                        parts.append("Results (truncated):")
+                        parts.append(content[:2000] + "...")
+                    else:
+                        parts.append("")
+                        parts.append("Results:")
+                        parts.append(content)
+            
+            return "\n".join(parts)
+            
+        except subprocess.TimeoutExpired:
+            self.logger.error("DS-Star timeout", indent=2)
             return super().run(question, verbose)
-    
+        except Exception as e:
+            self.logger.error(f"DS-Star error: {e}", indent=2)
+            return super().run(question, verbose)
+
     def _discover_data_files(self) -> List[Path]:
         """
         Discover CSV files in the input directory.

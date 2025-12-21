@@ -25,13 +25,13 @@ with open(_DSSTAR_DIR / "prompt.yaml", "r") as f:
 class DSConfig:
     """Centralized configuration for the entire pipeline."""
     run_id: str = None
-    max_refinement_rounds: int = 5
+    max_refinement_rounds: int = 3
     api_key: Optional[str] = None
     model_name: str = None
     interactive: bool = False
     auto_debug: bool = True
-    # debug attempts defaults to inf for backwards compatibility
-    debug_attempts: float = float('inf')
+    # debug attempts defaults to 3
+    debug_attempts: float = 3
     execution_timeout: int = 60
     preserve_artifacts: bool = True
     runs_dir: str = "runs"
@@ -646,7 +646,15 @@ def main():
         'interactive': args.interactive or config_defaults.get('interactive', False),
         'max_refinement_rounds': args.max_rounds or config_defaults.get('max_refinement_rounds', 5),
         'model_name': config_defaults.get('model_name'),
-        'preserve_artifacts': config_defaults.get('preserve_artifacts', True)
+        'preserve_artifacts': config_defaults.get('preserve_artifacts', True),
+        'api_key': config_defaults.get('api_key'),
+        'auto_debug': config_defaults.get('auto_debug', True),
+        'debug_attempts': config_defaults.get('debug_attempts', float('inf')),
+        'execution_timeout': config_defaults.get('execution_timeout', 60),
+        'runs_dir': config_defaults.get('runs_dir', 'runs'),
+        'data_dir': config_defaults.get('data_dir', 'data'),
+        'code_library_dir': config_defaults.get('code_library_dir', 'code_library'),
+        'agent_models': config_defaults.get('agent_models', {})
     }
     
     # Filter out None values so dataclass defaults are used
