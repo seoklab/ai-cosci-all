@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 # available before importing modules that may read them during import-time.
 load_dotenv()
 
+# Fix LiteLLM callback limit issue (default 30 is too low for multi-agent systems)
+os.environ["LITELLM_MAX_CALLBACKS"] = "100"
+
 from src.agent.agent import create_agent
 from src.agent.meeting import run_virtual_lab
 from src.agent.meeting_refactored import run_virtual_lab as run_virtual_lab_subtask
@@ -550,7 +553,6 @@ Examples:
                 verbose=args.verbose,
                 data_dir=args.data_dir,
                 input_dir=args.input_dir,
-                max_iterations=args.max_iterations
             )
 
             print("\n" + "=" * 60)
