@@ -1712,22 +1712,41 @@ def search_literature(
         if cache_stats["online_new"] > 0:
             print(f"[CACHE] Updating SearchIndex with {cache_stats['online_new']} new papers...", file=sys.stderr)
             try:
+                # Create settings for indexing WITHOUT LLM calls (faster, no API costs)
+                from paperqa.settings import ParsingSettings as PS
+                index_settings_kwargs = {
+                    "llm": config.paperqa_llm,
+                    "summary_llm": config.paperqa_llm,
+                    "embedding": embedding_config,
+                    "parsing": PS(
+                        use_doc_details=False,  # CRITICAL: Disable LLM for indexing to avoid timeouts
+                        reader_config={
+                            "chunk_chars": 3000,
+                            "overlap": 100
+                        },
+                        multimodal=False,
+                    )
+                }
+                index_settings_obj = Settings(**index_settings_kwargs)
+                
                 # Configure index settings for online_papers directory
                 index_settings = IndexSettings(
                     paper_directory=str(online_papers_dir),
                     index_directory=str(local_index_dir),
                     sync_with_paper_directory=True,
                 )
-                settings.agent.index = index_settings
+                index_settings_obj.agent.index = index_settings
                 
-                # Build/update index
+                # Build/update index with non-LLM settings
                 async def build_index():
-                    return await get_directory_index(settings=settings, build=True)
+                    return await get_directory_index(settings=index_settings_obj, build=True)
                 
                 asyncio.run(build_index())
                 print(f"[CACHE] SearchIndex updated", file=sys.stderr)
             except Exception as e:
                 print(f"[WARNING] Failed to update SearchIndex: {e}", file=sys.stderr)
+                import traceback
+                traceback.print_exc(file=sys.stderr)
 
         # ===================================================================
         # FINAL QUERY
