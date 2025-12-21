@@ -8,3 +8,4 @@ __pycache__/
 check_credit.py
 NEXT_SESSION.md
 .paperqa_cache/
+outputs/

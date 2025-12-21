@@ -225,6 +225,11 @@ Examples:
         help="Enable Subtask-Centric Virtual Lab mode (sequential, research plan-driven)",
     )
     parser.add_argument(
+        "--save-intermediate",
+        action="store_true",
+        help="Save intermediate subtask results and round summaries to markdown files (only for subtask-centric mode)",
+    )
+    parser.add_argument(
         "--combined",
         action="store_true",
         help="Enable Combined Mode (LangGraph + Consensus)",
@@ -410,7 +415,8 @@ Examples:
                 verbose=args.verbose,
                 data_dir=args.data_dir,
                 input_dir=args.input_dir,
-                max_iterations=args.max_iterations
+                max_iterations=args.max_iterations,
+                save_intermediate=args.save_intermediate
             )
 
             logger.section("FINAL ANSWER (PI Synthesis with Red Flag Resolution)")
@@ -452,7 +458,8 @@ Examples:
                 max_team_size=args.team_size,
                 verbose=args.verbose,
                 data_dir=args.data_dir,
-                input_dir=args.input_dir
+                input_dir=args.input_dir,
+                save_intermediate=args.save_intermediate
             )
 
             print("\n" + "=" * 60)
@@ -596,8 +603,6 @@ Examples:
                 )
 
                 logger.section("FINAL ANSWER (with Red Flag Resolution)")
-                    input_dir=args.input_dir
-                )
 
                 print("\n" + "=" * 60)
                 print("FINAL ANSWER (with Red Flag Resolution):")
