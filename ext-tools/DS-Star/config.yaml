@@ -1,0 +1,23 @@
+# DS-Star Configuration for OpenRouter (Fixed Version)
+# Rate limit 회피 + 모든 CSV 파일 포함
+
+run_id: "ex1_problem3_openrouter_v2"
+
+
+model_name: "openrouter/anthropic/claude-3.5-sonnet"
+
+interactive: false
+max_refinement_rounds: 5 
+auto_debug: true
+debug_attempts: 3  
+execution_timeout: 1800
+preserve_artifacts: true
+
+agent_models:
+  ANALYZER: "openrouter/openai/gpt-4-turbo"
+  PLANNER: "openrouter/anthropic/claude-3.5-sonnet"
+  CODER: "openrouter/anthropic/claude-3.5-sonnet"
+  VERIFIER: "openrouter/openai/gpt-4-turbo"
+  ROUTER: "openrouter/anthropic/claude-3.5-sonnet"
+  DEBUGGER: "openrouter/qwen/qwen-2.5-coder-32b-instruct"
+  FINALYZER: "openrouter/anthropic/claude-3.5-sonnet"
