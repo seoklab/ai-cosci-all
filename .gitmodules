@@ -1,6 +1,6 @@
-[submodule "ext-tools/FastChat"]
-	path = ext-tools/FastChat
-	url = https://github.com/lm-sys/FastChat.git
 [submodule "FastChat"]
 	path = FastChat
+	url = https://github.com/lm-sys/FastChat.git
+[submodule "ext-tools/FastChat"]
+	path = ext-tools/FastChat
 	url = https://github.com/lm-sys/FastChat.git
