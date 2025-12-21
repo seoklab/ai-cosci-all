@@ -40,7 +40,8 @@ class VirtualLabMeeting:
         data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
         input_dir: Optional[str] = None,
         max_iterations: int = 30,
-        save_intermediate: bool = False
+        save_intermediate: bool = False,
+        use_dsstar: bool = False
     ):
         self.user_question = user_question
         self.verbose = verbose
@@ -51,6 +52,7 @@ class VirtualLabMeeting:
         self.input_dir = input_dir if input_dir is not None else data_dir
         self.max_iterations = max_iterations
         self.save_intermediate = save_intermediate
+        self.use_dsstar = use_dsstar
         self.logger = get_logger()
 
         self.logger.subsection("INITIALIZING SUBTASK-CENTRIC VIRTUAL LAB")
@@ -100,8 +102,8 @@ class VirtualLabMeeting:
             for spec in team_specs
         }
 
-        # 🆕 Add DS-Star Data Analyst to specialist pool if data analysis keywords detected
-        if DSSTAR_AVAILABLE and self._needs_data_analysis():
+        # Add DS-Star Data Analyst to specialist pool if enabled and data analysis keywords detected
+        if self.use_dsstar and DSSTAR_AVAILABLE and self._needs_data_analysis():
             self.logger.progress("Adding DS-Star Data Analysis Specialist to team")
 
             dsstar_analyst = DataAnalystAgent(
@@ -1230,7 +1232,8 @@ def run_virtual_lab(
     data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
     input_dir: Optional[str] = None,
     max_iterations: int = 30,
-    save_intermediate: bool = False
+    save_intermediate: bool = False,
+    use_dsstar: bool = False
 ) -> str:
     """Run a subtask-centric Virtual Lab meeting.
 
@@ -1246,6 +1249,7 @@ def run_virtual_lab(
         input_dir: Path to question-specific input data
         max_iterations: Maximum iterations per agent (default: 30)
         save_intermediate: Save intermediate subtask and round results (default: False)
+        use_dsstar: Enable DS-Star data analysis specialist (default: False)
 
     Returns:
         Final synthesized answer with red flags addressed
@@ -1269,7 +1273,8 @@ def run_virtual_lab(
         data_dir=data_dir,
         input_dir=input_dir,
         max_iterations=max_iterations,
-        save_intermediate=save_intermediate
+        save_intermediate=save_intermediate,
+        use_dsstar=use_dsstar
     )
 
     final_answer = meeting.run_meeting(num_rounds=num_rounds)
