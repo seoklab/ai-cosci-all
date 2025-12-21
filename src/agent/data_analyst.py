@@ -7,16 +7,30 @@ that can participate in VirtualLab meetings.
 
 import os
 import sys
+import traceback
+import yaml
+import datetime
 from typing import Optional, List
 from pathlib import Path
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Add DS-Star to path
 DSSTAR_PATH = Path(__file__).parent.parent.parent / "ext-tools" / "DS-Star"
 sys.path.insert(0, str(DSSTAR_PATH))
 
-
 from dsstar import DS_STAR_Agent, DSConfig
 from src.agent.agent import ScientificAgent, AgentPersona
+from src.utils.logger import get_logger
+
+
+def load_dsstar_config(config_path: Path) -> dict:
+    """Load DS-Star config.yaml if exists."""
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            return yaml.safe_load(f)
+    return {}
 
 
 class DataAnalystAgent(ScientificAgent):
@@ -56,7 +70,6 @@ class DataAnalystAgent(ScientificAgent):
             input_dir: Question-specific data directory
             **kwargs: Additional arguments passed to ScientificAgent
         """
-        # Create persona for this specialist
         persona = AgentPersona(
             title="Data Analysis Specialist (DS-Star)",
             expertise=(
@@ -74,7 +87,6 @@ class DataAnalystAgent(ScientificAgent):
             )
         )
         
-        # Initialize parent ScientificAgent
         super().__init__(
             persona=persona,
             api_key=api_key,
@@ -84,30 +96,65 @@ class DataAnalystAgent(ScientificAgent):
             input_dir=input_dir
         )
         
-        # Configure DS-Star
-        self.dsstar_config = DSConfig(
-            model_name=f"openrouter/{model}" if not model.startswith("openrouter/") else model,
-            api_key=api_key or os.getenv("OPENROUTER_API_KEY"),
-            max_refinement_rounds=5,  
-            auto_debug=True,
-            debug_attempts=3,  # Prevent infinite loops in meeting
-            execution_timeout=1800,  # max 30 minutes
-            preserve_artifacts=True,
-            data_dir=str(Path(self.input_dir) / "dsstar_temp"),  # Isolated workspace
+        self.logger = get_logger()
+        
+        dsstar_config_path = DSSTAR_PATH / "config.yaml"
+        dsstar_yaml_config = load_dsstar_config(dsstar_config_path)
+        agent_models = dsstar_yaml_config.get('agent_models', {})
+        
+        resolved_api_key = (
+            api_key or 
+            os.getenv("OPENROUTER_API_KEY") or 
+            os.getenv("OPENROUTER_KEY")
         )
         
-        # Lazy initialization of DS-Star agent
-        self._dsstar_agent = None
+        if not resolved_api_key:
+            self.logger.warning(
+                "No API key found! DS-Star will fail. Set OPENROUTER_API_KEY in .env or pass api_key parameter",
+                indent=2
+            )
         
-        # Create temp directory for DS-Star outputs
-        Path(self.dsstar_config.data_dir).mkdir(parents=True, exist_ok=True)
+        self.dsstar_base_config = {
+            'model_name': f"openrouter/{model}" if not model.startswith("openrouter/") else model,
+            'api_key': resolved_api_key,
+            'max_refinement_rounds': dsstar_yaml_config.get('max_refinement_rounds', 5),
+            'auto_debug': dsstar_yaml_config.get('auto_debug', True),
+            'debug_attempts': dsstar_yaml_config.get('debug_attempts', 3),
+            'execution_timeout': dsstar_yaml_config.get('execution_timeout', 1800),
+            'preserve_artifacts': True,
+            'agent_models': agent_models
+        }
+        
+        self.input_dir_path = Path(self.input_dir)
+        
+        if agent_models:
+            self.logger.info(f"Loaded {len(agent_models)} specialized models from DS-Star config.yaml", indent=2)
     
-    @property
-    def dsstar_agent(self) -> DS_STAR_Agent:
-        """Lazy initialization of DS-Star agent."""
-        if self._dsstar_agent is None:
-            self._dsstar_agent = DS_STAR_Agent(self.dsstar_config)
-        return self._dsstar_agent
+    def create_dsstar_agent(self) -> DS_STAR_Agent:
+        """Create an isolated DS-Star agent for each analysis.
+        
+        Uses original data location with unique runs_dir per execution.
+        
+        Returns:
+            DS_STAR_Agent with isolated runs_dir and shared data_dir
+        """
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:20]
+        project_root = Path(__file__).parent.parent.parent
+        unique_runs_dir = project_root / "outputs" / "dsstar_runs" / timestamp
+        unique_runs_dir.mkdir(parents=True, exist_ok=True)
+        
+        original_data_dir = self.input_dir_path.resolve()
+        
+        self.logger.info(f"DS-Star data_dir (original): {original_data_dir}", indent=4)
+        self.logger.info(f"DS-Star runs_dir (isolated): {unique_runs_dir}", indent=4)
+        
+        config = DSConfig(
+            data_dir=str(original_data_dir),
+            runs_dir=str(unique_runs_dir),
+            **self.dsstar_base_config
+        )
+        
+        return DS_STAR_Agent(config)
     
     def run(self, user_question: str, verbose: bool = False) -> str:
         """
@@ -120,15 +167,15 @@ class DataAnalystAgent(ScientificAgent):
         Returns:
             Analysis result as string
         """
-        # Detect if this is a data analysis request that DS-Star should handle
-        if self._should_use_dsstar(user_question):
-            if verbose:
-                print(f"[{self.persona.title}] Using DS-Star pipeline for data analysis")
+        self.logger.progress(f"[{self.persona.title}] Evaluating DS-Star applicability...")
+        
+        should_use = self._should_use_dsstar(user_question)
+        
+        if should_use:
+            self.logger.info(f"[{self.persona.title}] DS-Star pipeline SELECTED for data analysis", indent=2)
             return self._run_dsstar_analysis(user_question, verbose)
         else:
-            # Fall back to standard ScientificAgent behavior with tools
-            if verbose:
-                print(f"[{self.persona.title}] Using standard tools for analysis")
+            self.logger.warning(f"[{self.persona.title}] DS-Star NOT selected - using standard tools", indent=2)
             return super().run(user_question, verbose)
     
     def _should_use_dsstar(self, question: str) -> bool:
@@ -147,20 +194,26 @@ class DataAnalystAgent(ScientificAgent):
         Returns:
             True if DS-Star should handle it
         """
-        # Keywords that indicate DS-Star should be used
         dsstar_keywords = [
             "calculate", "correlation", "similarity", "expression",
             "gene pairs", "clustering", "pairwise", "matrix",
             "csv", "dataframe", "statistical analysis",
-            "top genes", "highly expressed", "filter genes"
+            "top genes", "highly expressed", "filter genes",
+            "process", "tpm", "analyze", "quantif"
         ]
         
         question_lower = question.lower()
-        return any(keyword in question_lower for keyword in dsstar_keywords)
+        matched = [kw for kw in dsstar_keywords if kw in question_lower]
+        
+        if matched:
+            self.logger.verbose(f"DS-Star keywords matched: {matched}", indent=4)
+            return True
+        else:
+            self.logger.verbose(f"No DS-Star keywords matched in question", indent=4)
+            return False
     
     def _run_dsstar_analysis(self, question: str, verbose: bool) -> str:
-        """
-        Execute DS-Star pipeline for data analysis.
+        """Execute DS-Star pipeline for data analysis.
         
         Args:
             question: Analysis question
@@ -169,45 +222,54 @@ class DataAnalystAgent(ScientificAgent):
         Returns:
             Formatted analysis result
         """
+        self.logger.progress(f"[{self.persona.title}] Starting DS-Star pipeline...")
+        
         try:
-            # Discover available CSV files in input directory
+            self.logger.info(f"Discovering CSV files in: {self.input_dir}", indent=2)
             data_files = self._discover_data_files()
             
             if not data_files:
-                return (
+                error_msg = (
                     f"[{self.persona.title}] No CSV files found in {self.input_dir}. "
                     "DS-Star requires CSV data files for analysis."
                 )
+                self.logger.error(error_msg, indent=2)
+                return error_msg
             
-            if verbose:
-                print(f"[{self.persona.title}] Found data files: {data_files}")
-                print(f"[{self.persona.title}] Starting DS-Star pipeline...")
+            self.logger.success(f"Found {len(data_files)} CSV files: {[f.name for f in data_files]}", indent=2)
             
-            # Copy data files to DS-Star workspace
-            self._prepare_dsstar_data(data_files)
+            self.logger.progress("Creating DS-Star agent with isolated runs_dir...", indent=2)
+            dsstar_agent = self.create_dsstar_agent()
             
-            # Run DS-Star pipeline
-            result = self.dsstar_agent.run_pipeline(
+            self.logger.info(f"DS-Star will read data from: {dsstar_agent.config.data_dir}", indent=2)
+            self.logger.info(f"DS-Star will save results to: {dsstar_agent.config.runs_dir}", indent=2)
+            
+            absolute_data_files = [str(f.resolve()) for f in data_files]
+            
+            self.logger.progress("Executing DS-Star run_pipeline()...", indent=2)
+            self.logger.verbose(f"Data files: {[f.name for f in data_files]}", indent=4)
+            result = dsstar_agent.run_pipeline(
                 query=question,
-                data_files=[f.name for f in data_files]  # Use just filenames
+                data_files=absolute_data_files
             )
             
-            # Format result for VirtualLab context
             formatted_result = self._format_dsstar_result(result)
-            
-            if verbose:
-                print(f"[{self.persona.title}] DS-Star analysis complete")
+            self.logger.success(f"[{self.persona.title}] DS-Star analysis complete!", indent=2)
             
             return formatted_result
             
         except Exception as e:
+            error_trace = traceback.format_exc()
             error_msg = (
-                f"[{self.persona.title}] DS-Star analysis encountered an error: {str(e)}\n\n"
+                f"[{self.persona.title}] DS-Star analysis encountered an error:\n"
+                f"Error: {str(e)}\n"
+                f"Traceback:\n{error_trace}\n\n"
                 "Falling back to standard tool-based analysis..."
             )
-            if verbose:
-                print(error_msg)
-            # Fallback to standard agent behavior
+            
+            self.logger.error(error_msg, indent=2)
+            print(error_msg)
+            
             return super().run(question, verbose)
     
     def _discover_data_files(self) -> List[Path]:
@@ -220,30 +282,12 @@ class DataAnalystAgent(ScientificAgent):
         input_path = Path(self.input_dir)
         csv_files = list(input_path.glob("*.csv"))
         
-        # Also check common subdirectories
         for subdir in ["data", "Data", "DATA"]:
             subdir_path = input_path / subdir
             if subdir_path.exists():
                 csv_files.extend(subdir_path.glob("*.csv"))
         
-        return sorted(set(csv_files))  # Remove duplicates
-    
-    def _prepare_dsstar_data(self, data_files: List[Path]):
-        """
-        Copy data files to DS-Star's working directory.
-        
-        Args:
-            data_files: List of data file paths to copy
-        """
-        import shutil
-        
-        dsstar_data_dir = Path(self.dsstar_config.data_dir)
-        dsstar_data_dir.mkdir(parents=True, exist_ok=True)
-        
-        for file_path in data_files:
-            dest_path = dsstar_data_dir / file_path.name
-            if not dest_path.exists():
-                shutil.copy2(file_path, dest_path)
+        return sorted(set(csv_files))
     
     def _format_dsstar_result(self, result: dict) -> str:
         """
@@ -260,17 +304,14 @@ class DataAnalystAgent(ScientificAgent):
             ""
         ]
         
-        # Add summary
         output_parts.append("**Analysis Complete:**")
         output_parts.append(f"- Run ID: {result['run_id']}")
         output_parts.append(f"- Total Steps: {result['total_steps']}")
         output_parts.append("")
         
-        # Add result
         output_parts.append("**Results:**")
         final_result = result.get('final_result', '').strip()
         
-        # Truncate if too long (meeting context limitation)
         if len(final_result) > 2000:
             output_parts.append(final_result[:2000] + "...[truncated]")
             output_parts.append("")
@@ -281,7 +322,6 @@ class DataAnalystAgent(ScientificAgent):
         return "\n".join(output_parts)
 
 
-# Convenience function for creating DataAnalystAgent
 def create_data_analyst(
     api_key: Optional[str] = None,
     model: Optional[str] = None,
@@ -312,4 +352,3 @@ def create_data_analyst(
         data_dir=data_dir,
         input_dir=input_dir
     )
-

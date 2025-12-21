@@ -337,12 +337,15 @@ class DS_STAR_Agent:
         exec_path.write_text(code_script, encoding='utf-8')
         
         try:
+            # This allows pd.read_csv('file.csv') to find files in data_dir
+            execution_cwd = Path(self.config.data_dir).resolve()
+            
             result = subprocess.run(
                 [sys.executable, str(exec_path)],
                 capture_output=True,
                 text=True,
                 timeout=self.config.execution_timeout,
-                cwd=Path.cwd()
+                cwd=str(execution_cwd)  # Execute in data_dir, not project root
             )
             
             if result.returncode == 0:
