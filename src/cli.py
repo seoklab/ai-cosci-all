@@ -285,6 +285,73 @@ Examples:
     if args.input_dir is None:
         args.input_dir = args.data_dir
 
+    # ===================================================================
+    # CREATE RUN-SPECIFIC CACHE DIRECTORY FOR PAPERQA
+    # This ensures all search_literature calls in this CLI execution
+    # share the same PDF pool
+    # ===================================================================
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Create safe directory name from question
+    if args.question:
+        # Clean question: only alphanumeric, spaces, hyphens
+        clean_question = "".join(c for c in args.question if c.isalnum() or c in (' ', '-')).strip()
+        clean_question = clean_question.replace(' ', '_')
+        # Limit length
+        if len(clean_question) > 50:
+            clean_question = clean_question[:50]
+        dir_name = f"run_{timestamp}_{clean_question}"
+    else:
+        dir_name = f"run_{timestamp}_interactive"
+    
+    cache_base_dir = Path.cwd() / ".paperqa_cache"
+    run_cache_dir = cache_base_dir / dir_name
+    run_cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Set environment variable for search_literature to use
+    os.environ["PAPERQA_RUN_CACHE_DIR"] = str(run_cache_dir)
+    print(f"✓ PaperQA cache directory: {run_cache_dir}")
+    
+    # ===================================================================
+    # COPY PRE-PROVIDED PAPERS TO online_papers DIRECTORY
+    # If user has papers in papers/ directory, copy them to cache
+    # so they're available for search_literature from the start
+    # ===================================================================
+    import shutil
+    from src.config import get_default_config
+    
+    config = get_default_config()
+    papers_source_dir = Path(config.paper_library_dir)
+    online_papers_dir = run_cache_dir / "online_papers"
+    online_papers_dir.mkdir(exist_ok=True)
+    
+    if papers_source_dir.exists():
+        pdf_files = list(papers_source_dir.glob("**/*.pdf"))
+        if pdf_files:
+            print(f"✓ Copying {len(pdf_files)} pre-provided papers to cache...")
+            copied_count = 0
+            for pdf_file in pdf_files:
+                try:
+                    dest_file = online_papers_dir / pdf_file.name
+                    # Only copy if destination doesn't exist (avoid overwriting)
+                    if not dest_file.exists():
+                        shutil.copy2(pdf_file, dest_file)
+                        copied_count += 1
+                except Exception as e:
+                    print(f"  Warning: Could not copy {pdf_file.name}: {e}")
+            print(f"  → {copied_count} papers copied to {online_papers_dir}")
+    
+    # Save run metadata
+    run_metadata = {
+        "question": args.question if args.question else "interactive",
+        "mode": "subtask-centric" if args.subtask_centric else "virtual-lab" if args.virtual_lab else "single",
+        "timestamp": timestamp,
+        "model": args.model,
+    }
+    import json
+    with open(run_cache_dir / "run_metadata.json", 'w') as f:
+        json.dump(run_metadata, f, indent=2)
+
     # Check for conflicting modes
     if args.virtual_lab and args.with_critic:
         print("Error: Cannot use both --virtual-lab and --with-critic at the same time.", file=sys.stderr)
@@ -596,8 +663,6 @@ Examples:
                 )
 
                 logger.section("FINAL ANSWER (with Red Flag Resolution)")
-                    input_dir=args.input_dir
-                )
 
                 print("\n" + "=" * 60)
                 print("FINAL ANSWER (with Red Flag Resolution):")
