@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 # available before importing modules that may read them during import-time.
 load_dotenv()
 
+# Fix LiteLLM callback limit issue (default 30 is too low for multi-agent systems)
+os.environ["LITELLM_MAX_CALLBACKS"] = "100"
+
 from src.agent.agent import create_agent
 from src.agent.meeting import run_virtual_lab
 from src.agent.meeting_refactored import run_virtual_lab as run_virtual_lab_subtask
@@ -225,6 +228,11 @@ Examples:
         help="Enable Subtask-Centric Virtual Lab mode (sequential, research plan-driven)",
     )
     parser.add_argument(
+        "--save-intermediate",
+        action="store_true",
+        help="Save intermediate subtask results and round summaries to markdown files (only for subtask-centric mode)",
+    )
+    parser.add_argument(
         "--combined",
         action="store_true",
         help="Enable Combined Mode (LangGraph + Consensus)",
@@ -284,6 +292,73 @@ Examples:
     # Set default input directory if not specified
     if args.input_dir is None:
         args.input_dir = args.data_dir
+
+    # ===================================================================
+    # CREATE RUN-SPECIFIC CACHE DIRECTORY FOR PAPERQA
+    # This ensures all search_literature calls in this CLI execution
+    # share the same PDF pool
+    # ===================================================================
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Create safe directory name from question
+    if args.question:
+        # Clean question: only alphanumeric, spaces, hyphens
+        clean_question = "".join(c for c in args.question if c.isalnum() or c in (' ', '-')).strip()
+        clean_question = clean_question.replace(' ', '_')
+        # Limit length
+        if len(clean_question) > 50:
+            clean_question = clean_question[:50]
+        dir_name = f"run_{timestamp}_{clean_question}"
+    else:
+        dir_name = f"run_{timestamp}_interactive"
+    
+    cache_base_dir = Path.cwd() / ".paperqa_cache"
+    run_cache_dir = cache_base_dir / dir_name
+    run_cache_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Set environment variable for search_literature to use
+    os.environ["PAPERQA_RUN_CACHE_DIR"] = str(run_cache_dir)
+    print(f"✓ PaperQA cache directory: {run_cache_dir}")
+    
+    # ===================================================================
+    # COPY PRE-PROVIDED PAPERS TO online_papers DIRECTORY
+    # If user has papers in papers/ directory, copy them to cache
+    # so they're available for search_literature from the start
+    # ===================================================================
+    import shutil
+    from src.config import get_default_config
+    
+    config = get_default_config()
+    papers_source_dir = Path(config.paper_library_dir)
+    online_papers_dir = run_cache_dir / "online_papers"
+    online_papers_dir.mkdir(exist_ok=True)
+    
+    if papers_source_dir.exists():
+        pdf_files = list(papers_source_dir.glob("**/*.pdf"))
+        if pdf_files:
+            print(f"✓ Copying {len(pdf_files)} pre-provided papers to cache...")
+            copied_count = 0
+            for pdf_file in pdf_files:
+                try:
+                    dest_file = online_papers_dir / pdf_file.name
+                    # Only copy if destination doesn't exist (avoid overwriting)
+                    if not dest_file.exists():
+                        shutil.copy2(pdf_file, dest_file)
+                        copied_count += 1
+                except Exception as e:
+                    print(f"  Warning: Could not copy {pdf_file.name}: {e}")
+            print(f"  → {copied_count} papers copied to {online_papers_dir}")
+    
+    # Save run metadata
+    run_metadata = {
+        "question": args.question if args.question else "interactive",
+        "mode": "subtask-centric" if args.subtask_centric else "virtual-lab" if args.virtual_lab else "single",
+        "timestamp": timestamp,
+        "model": args.model,
+    }
+    import json
+    with open(run_cache_dir / "run_metadata.json", 'w') as f:
+        json.dump(run_metadata, f, indent=2)
 
     # Check for conflicting modes
     if args.virtual_lab and args.with_critic:
@@ -410,7 +485,8 @@ Examples:
                 verbose=args.verbose,
                 data_dir=args.data_dir,
                 input_dir=args.input_dir,
-                max_iterations=args.max_iterations
+                max_iterations=args.max_iterations,
+                save_intermediate=args.save_intermediate
             )
 
             logger.section("FINAL ANSWER (PI Synthesis with Red Flag Resolution)")
@@ -428,6 +504,42 @@ Examples:
 
             # Print total elapsed time
             logger.print_elapsed_time()
+
+        elif args.subtask_centric:
+            # Subtask-Centric Virtual Lab mode - sequential research plan-driven collaboration
+            print("\n" + "=" * 60)
+            print("SUBTASK-CENTRIC VIRTUAL LAB MODE")
+            print("=" * 60)
+            print(f"Question: {args.question}")
+            print(f"Configuration: {args.rounds} rounds, max {args.team_size} specialists")
+            print("=" * 60)
+
+            # Create run-specific output directory
+            output_mgr = get_output_manager()
+            run_dir = output_mgr.create_run_directory(args.question, mode="subtask-centric")
+            print(f"Output directory: {run_dir}\n")
+
+            final_answer = run_virtual_lab_subtask(
+                question=args.question,
+                api_key=args.api_key,
+                model=args.model,
+                provider=provider,
+                num_rounds=args.rounds,
+                max_team_size=args.team_size,
+                verbose=args.verbose,
+                data_dir=args.data_dir,
+                input_dir=args.input_dir,
+                save_intermediate=args.save_intermediate
+            )
+
+            print("\n" + "=" * 60)
+            print("FINAL ANSWER (PI Synthesis with Red Flag Resolution):")
+            print("=" * 60)
+            print(final_answer)
+
+            # Save to file
+            output_file = save_answer_to_file(final_answer, args.question, args.output, mode="subtask-centric")
+            print(f"\n✓ Answer saved to: {output_file}")
 
         elif args.virtual_lab:
             # Virtual Lab mode - multi-agent collaboration (original parallel model)
@@ -448,7 +560,6 @@ Examples:
                 verbose=args.verbose,
                 data_dir=args.data_dir,
                 input_dir=args.input_dir,
-                max_iterations=args.max_iterations
             )
 
             print("\n" + "=" * 60)
@@ -545,6 +656,7 @@ Examples:
                 run_dir = output_mgr.create_run_directory(question, mode="subtask-centric")
                 logger.success(f"Output directory: {run_dir}")
                 print()
+                print(f"Output directory: {run_dir}\n")
 
                 final_answer = run_virtual_lab_subtask(
                     question=question,
@@ -560,6 +672,10 @@ Examples:
                 )
 
                 logger.section("FINAL ANSWER (with Red Flag Resolution)")
+
+                print("\n" + "=" * 60)
+                print("FINAL ANSWER (with Red Flag Resolution):")
+                print("=" * 60)
                 print(final_answer)
 
                 # Auto-save in interactive mode
@@ -568,6 +684,8 @@ Examples:
 
                 # Print elapsed time for this question
                 logger.print_elapsed_time()
+                print(f"✓ Saved to: {output_file}")
+                print()
 
             elif args.virtual_lab:
                 # Virtual Lab mode in interactive
