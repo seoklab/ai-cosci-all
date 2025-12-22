@@ -778,21 +778,55 @@ Provide a brief opening (2-3 sentences) that:
 {red_flag_section}
 
 **Your Task:**
-Provide a comprehensive final answer with these sections:
+Provide a DETAILED, COMPREHENSIVE final answer. DO NOT summarize or condense the findings.
 
-1. **Executive Summary** - Direct answer to the research question
-2. **Key Findings** - Integrate insights from all rounds and subtasks
-3. **Red Flag Resolution** - Address any remaining critical red flags:
+**CRITICAL INSTRUCTIONS:**
+1. If the original question contains multiple sub-questions or parts (e.g., "What is X? How does Y work? What are the implications?"), you MUST address EACH sub-question separately and thoroughly.
+2. For EACH sub-question or aspect of the question:
+   - Provide a complete, detailed answer
+   - Include all relevant data, findings, and evidence from the subtask outputs
+   - Cite specific results, numbers, files, and analyses
+   - Do NOT skip or condense information
+3. Preserve the depth and detail from specialist analyses - do not over-summarize
+4. Include all relevant context, methodologies, and reasoning
+
+**Structure your answer with these sections:**
+
+1. **Answer to Each Question Component**
+   - If the question has multiple parts, create a subsection for EACH part
+   - For each part, provide the full, detailed answer drawing from all relevant subtask outputs
+   - Include all evidence, data, and citations for that specific question component
+   - Be thorough and comprehensive - aim for completeness, not brevity
+
+2. **Integrated Key Findings**
+   - Synthesize insights that span multiple question components
+   - Highlight connections and patterns across subtasks
+   - Preserve specific details, numbers, and evidence
+
+3. **Red Flag Resolution** (if critical flags exist)
    - For each flag: state what was done to resolve it across the rounds
    - If a fix requires additional analysis, acknowledge and propose next steps
    - If a flag is invalid, explain why
-4. **Evidence & Citations** - Preserve all citations, PMIDs, files, databases mentioned
-5. **Limitations & Uncertainties** - Acknowledge gaps
-6. **Recommended Next Steps** - If appropriate
 
-**CRITICAL REQUIREMENT:**
-The "Red Flag Resolution" section is MANDATORY if there are critical flags.
-Synthesize across all {num_rounds} rounds to provide the most complete answer possible."""
+4. **Evidence & Citations**
+   - List all PMIDs, databases, files, and tools used
+   - Preserve all specific references from specialist work
+
+5. **Limitations & Uncertainties**
+   - Acknowledge gaps in data or analysis
+   - Note areas requiring further investigation
+
+6. **Recommended Next Steps** (if appropriate)
+   - Suggest concrete follow-up analyses or experiments
+
+**REMEMBER:**
+- DO NOT over-summarize or condense specialist findings
+- Each question component deserves a FULL, DETAILED answer
+- Include ALL relevant evidence, data points, and citations
+- Aim for thoroughness and completeness
+- The goal is to provide a comprehensive response that fully addresses every aspect of the original question
+
+Synthesize across all {num_rounds} rounds to provide the most complete and detailed answer possible."""
 
         self.logger.agent_action("PI", "Synthesizing final answer across all rounds", indent=2)
 
