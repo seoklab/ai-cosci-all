@@ -2444,18 +2444,67 @@ def search_literature(
         # ===================================================================
 
         # ===================================================================
-        # FINAL QUERY
+        # FINAL QUERY - CONTEXT RETRIEVAL (Agent-Centric Mode)
         # ===================================================================
-        answer_obj = asyncio.run(docs.aquery(question, settings=settings))
+        # Strategy: Retrieve contexts WITHOUT PaperQA's LLM making the decision
+        # Let the agent synthesize information from all available contexts
 
-        contexts = [
-            {
-                "text": ctx.context,
-                "citation": ctx.text.name,
-                "score": ctx.score
-            }
-            for ctx in answer_obj.contexts
-        ]
+        # Retrieve more contexts for the agent to work with
+        k_contexts = max(max_sources * 3, 15)  # Retrieve 3x more contexts than max_sources
+        print(f"[INFO] Retrieving up to {k_contexts} contexts for agent...", file=sys.stderr)
+
+        try:
+            # Use retrieve_texts to get contexts without LLM answer generation
+            retrieved_texts = asyncio.run(docs.retrieve_texts(
+                query=question,
+                k=k_contexts,
+                settings=settings
+            ))
+
+            # Format contexts for agent
+            contexts = [
+                {
+                    "text": text.text,
+                    "citation": text.name,
+                    "doc": text.doc.citation if hasattr(text, 'doc') and text.doc else "Unknown",
+                    "score": None  # retrieve_texts doesn't provide scores
+                }
+                for text in retrieved_texts
+            ]
+
+            print(f"[SUCCESS] Retrieved {len(contexts)} contexts for agent analysis", file=sys.stderr)
+
+            # Create a summary of available papers for the agent
+            paper_list = []
+            for doc_key, doc in docs.docs.items():
+                paper_list.append({
+                    "title": doc.citation,
+                    "key": doc_key
+                })
+
+            # Agent-friendly message instead of PaperQA's answer
+            agent_message = (
+                f"Retrieved {len(contexts)} relevant passages from {len(docs.docs)} papers. "
+                f"Analyze these contexts to answer the question. "
+                f"Papers available: {len(docs.docs)} total."
+            )
+
+        except Exception as e:
+            print(f"[WARNING] retrieve_texts failed, falling back to aquery: {e}", file=sys.stderr)
+            # Fallback to original aquery if retrieve_texts fails
+            answer_obj = asyncio.run(docs.aquery(question, settings=settings))
+
+            contexts = [
+                {
+                    "text": ctx.context,
+                    "citation": ctx.text.name,
+                    "score": ctx.score
+                }
+                for ctx in answer_obj.contexts
+            ]
+
+            agent_message = answer_obj.answer
+            paper_list = []
 
         # ===================================================================
         # SAVE CACHE
@@ -2468,7 +2517,7 @@ def search_literature(
             print(f"[WARNING] Failed to save cache: {e}", file=sys.stderr)
 
         print(f"[CACHE] Cache directory: {cache_dir}", file=sys.stderr)
-        
+
         # Check failed downloads
         failed_downloads_list = _load_failed_downloads(failed_file) if should_do_online else []
         if failed_downloads_list:
@@ -2480,9 +2529,10 @@ def search_literature(
             print(f"{'='*80}\n", file=sys.stderr)
 
         return ToolResult(True, {
-            "answer": answer_obj.answer,
-            "contexts": contexts,
-            "references": answer_obj.references,
+            "answer": agent_message,  # Summary message for agent, not PaperQA's answer
+            "contexts": contexts,  # All retrieved contexts for agent to analyze
+            "papers": paper_list,  # List of available papers
+            "references": "",  # Empty since agent will create their own
             "sources_used": sources_used,
             "mode": actual_mode,
             "cache_stats": cache_stats,
