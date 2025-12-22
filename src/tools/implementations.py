@@ -1635,7 +1635,7 @@ def search_literature(
 
         # Use online_papers as the paper directory for SearchIndex
         # This way all downloaded PDFs are automatically indexed
-        paper_dir_path = online_papers_dir
+        paper_dir_path_s = [paper_dir_path, online_papers_dir]
 
         # Check if local papers exist
         has_local_papers = paper_dir_path.exists() and any(

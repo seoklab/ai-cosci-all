@@ -12,6 +12,7 @@ Run with: python tests/test_search_literature_simple.py
 
 import os
 import sys
+import time
 from pathlib import Path
 
 # Add project root to path
@@ -62,6 +63,10 @@ local_pdfs = []
 if paper_lib_path.exists():
     local_pdfs = list(paper_lib_path.glob("**/*.pdf"))
     print(f"Local PDFs found: {len(local_pdfs)}")
+    if local_pdfs and len(local_pdfs) <= 10:  # Show filenames if not too many
+        print("Local PDF files:")
+        for pdf in local_pdfs:
+            print(f"  - {pdf.name}")
 else:
     print(f"Paper library directory does not exist (will use online only)")
 
@@ -80,7 +85,8 @@ print(f"Question: {test_question}")
 # Determine search mode
 if len(local_pdfs) > 0:
     search_mode = "auto"  # Will use local + online if needed
-    print(f"Mode: auto (local-first with {len(local_pdfs)} local PDFs)")
+    # search_mode = "local-first"  # Prefer local PDFs first
+    print(f"Mode: auto (local-first with {len(local_pdfs)} local PDFs, then online fallback)")
 else:
     search_mode = "online"  # Online only
     print(f"Mode: online (no local PDFs available)")
@@ -88,15 +94,16 @@ else:
 print("\nSearching... (this may take 30-60 seconds)")
 print("-" * 70)
 
-import time
 start_time = time.time()
 
 try:
+    print("SUMIN search mode before function call:", search_mode)
     result = search_literature(
         question=test_question,
         mode=search_mode,
-        max_sources=5,
-        cache_base_dir=str(test_cache_dir)
+        max_sources=8,  # Increased from 5 for better coverage
+        cache_base_dir=str(test_cache_dir),
+        paper_dir = config.paper_library_dir,
     )
 
     elapsed = time.time() - start_time
@@ -116,9 +123,7 @@ try:
                 print(f"\n--- Answer ---")
                 print(f"Length: {len(answer)} characters")
                 print(f"\nPreview (first 500 chars):")
-                print(answer[:500])
-                if len(answer) > 500:
-                    print(f"... ({len(answer) - 500} more characters)")
+                print(answer)
 
             # Show contexts
             contexts = output.get("contexts", [])

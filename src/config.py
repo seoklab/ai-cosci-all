@@ -88,10 +88,8 @@ def get_default_config() -> DataConfig:
         paper_library_dir=os.getenv("PAPER_LIBRARY_DIR", "./papers"),
         pubmed_email=os.getenv("PUBMED_EMAIL"),
         pubmed_api_key=os.getenv("PUBMED_API_KEY"),
-        paperqa_llm=os.getenv("PAPERQA_LLM", "openrouter/google/gemini-3-pro-preview"),
-        paperqa_embedding=os.getenv(
-            "PAPERQA_EMBEDDING", "st-multi-qa-MiniLM-L6-cos-v1"
-        ),
+        paperqa_llm=os.getenv("PAPERQA_LLM", "openrouter/google/gemini-3-flash-preview"),
+        paperqa_embedding=os.getenv("PAPERQA_EMBEDDING", "st-multi-qa-MiniLM-L6-cos-v1"),
         paperqa_max_sources=int(os.getenv("PAPERQA_MAX_SOURCES", "5")),
         use_paperqa_only=os.getenv("USE_PAPERQA_ONLY", "true").lower() == "true",
     )
