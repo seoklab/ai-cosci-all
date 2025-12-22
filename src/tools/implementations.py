@@ -1678,10 +1678,19 @@ def search_literature(
         # Create settings
         use_llm_during_parsing = ":free" not in config.paperqa_llm.lower()
 
+        embedding_kwargs = {}
+        if using_local_embeddings:
+            embedding_kwargs = {"device": "cpu"}
+            print(
+                "[INFO] Forcing CPU for local embeddings to ensure stability.",
+                file=sys.stderr,
+            )
+
         settings_kwargs = {
             "llm": config.paperqa_llm,
             "summary_llm": config.paperqa_llm,
             "embedding": embedding_config,
+            "embedding_config": embedding_kwargs,
             "parsing": ParsingSettings(
                 use_doc_details=use_llm_during_parsing,
                 reader_config={"chunk_chars": 3000, "overlap": 100},
@@ -1776,8 +1785,9 @@ def search_literature(
                         llm=config.paperqa_llm,
                         summary_llm=config.paperqa_llm,
                         embedding=embedding_config,
+                        embedding_config=embedding_kwargs,
                         parsing=PS(
-                            use_doc_details=False,  # CRITICAL: No LLM during indexing
+                            use_doc_details=False,
                             reader_config={"chunk_chars": 3000, "overlap": 100},
                             multimodal=False,
                         ),
@@ -2060,21 +2070,24 @@ def search_literature(
                             metadata_key = f"arxiv:{arxiv_id}"
 
                         if metadata_key and metadata_key in existing_metadata:
-                            # Already downloaded - use cached file
+                            # Already downloaded
                             cached_filename = existing_metadata[metadata_key][
                                 "filename"
                             ]
+
+                            # FIX: "abstract_only"인 경우 파일 찾기를 건너뜀
+                            if cached_filename == "abstract_only":
+                                # 이미 abstract가 확보된 것이므로 카운트만 하고 넘어감
+                                cache_stats["online_cached"] += 1
+                                continue
+
                             local_pdf_path = online_papers_dir / cached_filename
 
                             if local_pdf_path.exists():
+                                # (기존 코드 그대로 유지)
                                 print(
                                     f"[INFO] Using cached paper: {cached_filename}",
                                     file=sys.stderr,
-                                )
-                                citation = (
-                                    f"{author_names}. {title}. {year}"
-                                    if year
-                                    else f"{author_names}. {title}"
                                 )
                                 try:
                                     asyncio.run(
