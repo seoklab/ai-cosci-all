@@ -1482,6 +1482,22 @@ def search_literature(
         - cache_dir: Path to this question's cache directory
     """
     try:
+        # Check if CUDA is actually functional (not just stub library)
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                # Try to actually use CUDA - this will fail with stub library
+                try:
+                    torch.zeros(1).cuda()
+                except Exception:
+                    # CUDA stub - force CPU mode
+                    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+            else:
+                os.environ["CUDA_VISIBLE_DEVICES"] = ""
+        except Exception:
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
         # Suppress ALL pypdf warnings globally - must be before ANY imports
         import warnings
         import sys

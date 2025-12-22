@@ -9,6 +9,25 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Fix LiteLLM callback limit issue
+os.environ["LITELLM_MAX_CALLBACKS"] = "100"
+
+# Check if CUDA is actually functional (not just stub library) BEFORE any torch imports
+# This must happen before SentenceTransformer or any deep learning library is imported
+try:
+    import torch
+
+    if torch.cuda.is_available():
+        try:
+            torch.zeros(1).cuda()
+        except Exception:
+            # CUDA stub library detected - force CPU mode
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    else:
+        os.environ["CUDA_VISIBLE_DEVICES"] = ""
+except Exception:
+    os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
 from src.agent.agent import create_agent
 from src.agent.meeting import run_virtual_lab
 from src.agent.meeting_refactored import run_virtual_lab as run_virtual_lab_subtask
