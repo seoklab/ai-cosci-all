@@ -36,7 +36,7 @@ class DataConfig:
     pubmed_api_key: Optional[str] = None
 
     # PaperQA settings
-    paperqa_llm: str = "openrouter/google/gemini-3-pro-preview"  # Model for PaperQA (via OpenRouter) - PAID model
+    paperqa_llm: str = "openrouter/google/gemini-3-flash-preview"  # Model for PaperQA (via OpenRouter) - PAID model
     paperqa_embedding: str = "st-multi-qa-MiniLM-L6-cos-v1"  # Local embedding (free, no API calls)
     paperqa_max_sources: int = 5  # Maximum contexts to retrieve
     use_paperqa_only: bool = True  # If True, use only search_literature (paper-qa) and disable search_pubmed
