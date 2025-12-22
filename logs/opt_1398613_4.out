@@ -1,0 +1,15 @@
+========================================
+SLURM ARRAY JOB
+========================================
+Job ID: 1398613_4
+Array Task ID: 4
+Node: nova003
+Start time: Sun Dec 21 12:01:51 PM KST 2025
+========================================
+Configuration: r2_t3_i30
+  Mode: subtask-centric
+  Rounds: 2
+  Team size: 3
+  Max iterations: 30
+========================================
+ERROR: Question file not found: /data/galaxy4/user/j2ho/projects/ai-cosci-all//tmp/Q5_test.txt

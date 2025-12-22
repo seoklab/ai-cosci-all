@@ -333,6 +333,10 @@ Examples:
     if args.input_dir is None:
         args.input_dir = args.data_dir
 
+    # Convert input_dir to absolute path to avoid path resolution issues
+    args.input_dir = str(Path(args.input_dir).resolve())
+    args.data_dir = str(Path(args.data_dir).resolve())
+
     # Set s2_use_keywords in config
     from src.config import get_global_config
 
@@ -542,10 +546,22 @@ Examples:
 
             # Create run-specific output directory
             output_mgr = get_output_manager()
-            run_dir = output_mgr.create_run_directory(
-                args.question, mode="subtask-centric"
-            )
-            logger.success(f"Output directory: {run_dir}")
+
+            # If --output is specified, use its parent directory as run_dir
+            # This ensures ALL files (intermediate + final) go to the same directory
+            if args.output:
+                output_path = Path(args.output)
+                run_dir = output_path.parent.resolve()
+                run_dir.mkdir(parents=True, exist_ok=True)
+                # Set this as the current run directory in OutputManager
+                output_mgr._current_run_dir = run_dir
+                logger.success(f"Output directory: {run_dir} (from --output)")
+            else:
+                # Auto-generate timestamped run directory
+                run_dir = output_mgr.create_run_directory(
+                    args.question, mode="subtask-centric"
+                )
+                logger.success(f"Output directory: {run_dir}")
 
             logger.progress("Starting Virtual Lab session...")
             print()

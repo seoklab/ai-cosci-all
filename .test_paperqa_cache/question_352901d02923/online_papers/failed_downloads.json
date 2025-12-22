@@ -1,0 +1,24 @@
+[
+  {
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC12708269/",
+    "doi": "",
+    "arxiv_id": "",
+    "pmid": "41415289",
+    "title": "\"Dissecting the role of T cell exhaustion in cancer progression: a multifaceted approach\".",
+    "filename": "PMID_41415289_Dissecting_the_role_of_T_cell_exhaustion_in_cancer.pdf",
+    "source": "pubmed_pmc",
+    "reason": "All PMC sources failed - 404 Client Error: Not Found for url: https://www.ebi.ac.uk/europepmc/webservices/rest/PMC12708269/fullTextURLs?format=json",
+    "timestamp": "2025-12-22 13:41:20"
+  },
+  {
+    "url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC12695825/",
+    "doi": "",
+    "arxiv_id": "",
+    "pmid": "41394856",
+    "title": "Synthetic biology approaches to enhance cancer immune responses.",
+    "filename": "PMID_41394856_Synthetic_biology_approaches_to_enhance_cancer_imm.pdf",
+    "source": "pubmed_pmc",
+    "reason": "All PMC sources failed - 404 Client Error: Not Found for url: https://www.ebi.ac.uk/europepmc/webservices/rest/PMC12695825/fullTextURLs?format=json",
+    "timestamp": "2025-12-22 13:41:38"
+  }
+]

@@ -163,7 +163,7 @@ if [[ $REPLY =~ ^[Yy]$ ]]; then
     echo "  tail -f logs/opt_${JOB_ID}_1.out"
     echo "  tail -f logs/detailed_r2_t2_i15.log"
     echo ""
-    echo "After completion, view results:"
+    echo "After completion, view results: (example)"
     echo "  cat logs/timing_summary.csv"
     echo "  ls -lh optimization_results/"
     echo "  diff optimization_results/answer_r2_t2_i15.md optimization_results/answer_r2_t3_i30.md"

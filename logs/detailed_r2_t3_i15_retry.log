@@ -1,0 +1,76 @@
+✓ OPENROUTER_KEY loaded: sk-or-v1-22413e...
+usage: cli.py [-h] [--question QUESTION] [--interactive] [--model MODEL]
+              [--verbose] [--with-critic] [--virtual-lab] [--subtask-centric]
+              [--combined] [--langgraph] [--rounds ROUNDS]
+              [--team-size TEAM_SIZE] [--max-iterations MAX_ITERATIONS]
+              [--api-key API_KEY] [--data-dir DATA_DIR]
+              [--input-dir INPUT_DIR] [--output OUTPUT]
+
+CoScientist: AI Research Assistant for Biomedical Questions
+
+options:
+  -h, --help            show this help message and exit
+  --question QUESTION, -q QUESTION
+                        Question to ask the agent
+  --interactive, -i     Run in interactive mode
+  --model MODEL, -m MODEL
+                        Model to use (defaults to OPENROUTER_MODEL env var or
+                        claude-sonnet-4)
+  --verbose, -v         Print verbose output with tool calls
+  --with-critic, -c     Enable critic feedback loop for quality validation
+                        (single agent mode)
+  --virtual-lab, -vl    Enable Virtual Lab mode (multi-agent collaboration)
+  --subtask-centric, -sc
+                        Enable Subtask-Centric Virtual Lab mode (sequential,
+                        research plan-driven)
+  --combined            Enable Combined Mode (LangGraph + Consensus)
+  --langgraph           Enable LangGraph workflow (without consensus)
+  --rounds ROUNDS, -r ROUNDS
+                        Number of discussion rounds in Virtual Lab mode
+                        (default: 2)
+  --team-size TEAM_SIZE, -t TEAM_SIZE
+                        Maximum number of specialist agents in Virtual Lab
+                        mode (default: 3)
+  --max-iterations MAX_ITERATIONS
+                        Maximum iterations per agent for tool use (default:
+                        30, useful for testing with lower values)
+  --api-key API_KEY     API key (Anthropic or OpenRouter, or set env var)
+  --data-dir DATA_DIR, -d DATA_DIR
+                        Path to main database directory (Drug databases, PPI,
+                        GWAS, etc.). Defaults to DATABASE_DIR env var
+  --input-dir INPUT_DIR
+                        Path to question-specific input data (e.g., gene
+                        signatures, expression data). Defaults to INPUT_DIR
+                        env var, or --data-dir if not set
+  --output OUTPUT, -o OUTPUT
+                        Save the final answer to a file (supports .md, .txt).
+                        Auto-generates filename if not specified.
+
+Examples:
+  # Ask a single question
+  python -m src.cli --question "How can gene signatures guide drug repositioning?"
+
+  # Virtual Lab mode (multi-agent collaboration)
+  python -m src.cli --question "..." --virtual-lab
+
+  # Virtual Lab with more rounds and specialists
+  python -m src.cli --question "..." --virtual-lab --rounds 3 --team-size 4
+
+  # With critic feedback loop for quality validation (single agent)
+  python -m src.cli --question "..." --with-critic
+
+  # Interactive mode
+  python -m src.cli --interactive
+
+  # Save answer to a specific file
+  python -m src.cli --question "..." --output results/my_answer.md
+
+  # Use a different model
+  python -m src.cli --question "..." --model "openai/gpt-4"
+
+  # Use custom directories for databases and input data
+  python -m src.cli --question "..." --data-dir "/path/to/databases" --input-dir "/path/to/Q5"
+
+  # Verbose output to see tool calls
+  python -m src.cli --question "..." --verbose
+        

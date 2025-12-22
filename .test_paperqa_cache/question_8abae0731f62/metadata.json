@@ -1,0 +1,10 @@
+{
+  "question": "Are there research that connect inhibitor or antagonists; Nr4a2 Nurr1 Slc17a6 VGLUT2 Spry1 Spry2 with T cell exhaustion reversal?",
+  "question_hash": "8abae0731f62",
+  "created_at": 1766386836.7568026,
+  "last_used": 1766387057.5698261,
+  "settings": {
+    "llm": "openrouter/google/gemini-3-pro-preview",
+    "embedding": "st-multi-qa-MiniLM-L6-cos-v1"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "question": "What is T cell exhaustion?",
+  "question_hash": "24306d805c57",
+  "created_at": 1766153085.665535,
+  "settings": {
+    "llm": "openrouter/google/gemini-3-pro-preview",
+    "embedding": "st-multi-qa-MiniLM-L6-cos-v1"
+  },
+  "last_used": 1766153161.9878523,
+  "total_papers": 3,
+  "cache_stats": {
+    "local_cached": 3,
+    "local_new": 0,
+    "online_cached": 0,
+    "online_new": 0
+  }
+}

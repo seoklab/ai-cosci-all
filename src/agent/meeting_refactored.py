@@ -645,13 +645,26 @@ If work is sound, output: "No critical red flags detected."""
 {critique}
 
 **Your Task:**
-Provide a brief synthesis (3-5 paragraphs) that:
-1. Summarizes key findings from this round
+Provide a brief narrative synthesis (3-5 paragraphs) for team coordination that:
+1. Summarizes key findings and conclusions from this round
 2. Highlights any critical issues identified by the critic
 3. Notes what has been accomplished
-4. Identifies what still needs clarification (if anything)
+4. Identifies what still needs clarification or refinement
 
-Be concise but comprehensive."""
+**IMPORTANT - Selective Summarization:**
+- Narrative/reasoning can be summarized for brevity
+- BUT always preserve exact numbers when mentioning results:
+  * If citing correlations: include exact r and p values
+  * If citing gene counts: specify the exact number
+  * If citing fold changes: include Log2FC and FDR/p-values
+  * If citing key genes/targets: list them by name
+- Think: "Brief narrative with preserved quantitative precision"
+
+Example:
+❌ "Strong correlation between exhaustion and aging"
+✅ "Strong correlation between exhaustion and aging (r = 0.961, p = 0.002)"
+
+Be concise in narrative but precise with data."""
 
         self.logger.agent_action("PI", f"Synthesizing Round {round_num} findings", indent=2)
 
@@ -778,55 +791,136 @@ Provide a brief opening (2-3 sentences) that:
 {red_flag_section}
 
 **Your Task:**
-Provide a DETAILED, COMPREHENSIVE final answer. DO NOT summarize or condense the findings.
+Provide an EXTREMELY DETAILED, COMPREHENSIVE final answer. Think "technical research report" not "executive summary".
+
+**═══════════════════════════════════════════════════════════════**
+**CRITICAL: NEVER SUMMARIZE THESE - EXTRACT IN FULL:**
+**═══════════════════════════════════════════════════════════════**
+
+1. **Gene/Protein Lists**: If specialists identified genes, proteins, targets, or markers:
+   - List EVERY single gene/protein name explicitly
+   - Example: Don't say "29 exhaustion genes" → Say "Exhaustion genes (29): Pdcd1, Ctla4, Havcr2, Lag3, Tigit, ..." [list all 29]
+
+2. **Statistical Values**: Extract ALL numbers from specialist analyses:
+   - Correlation coefficients (r = X, p = Y)
+   - Fold changes (Log2FC = X, FDR = Y)
+   - Expression values (TPM, FPKM, etc.)
+   - P-values, confidence intervals, effect sizes
+   - Sample sizes, counts, percentages
+
+3. **Data Tables**: If specialists created tables or structured results:
+   - Reproduce tables in full (don't summarize rows)
+   - Include all columns and all data points
+   - Preserve exact values and formatting
+
+4. **Targets/Candidates**: If specialists identified intervention targets:
+   - Include EVERY target, not just top N
+   - For each target provide: name, direction (activate/inhibit), evidence (exact values), mechanism, druggability
+   - Create detailed subsections for each target
+
+5. **Method Details**: Include specific computational/analytical methods:
+   - Exact algorithms, tools, parameters used
+   - Statistical tests applied
+   - Thresholds and cutoffs
+
+**═══════════════════════════════════════════════════════════════**
 
 **CRITICAL INSTRUCTIONS:**
-1. If the original question contains multiple sub-questions or parts (e.g., "What is X? How does Y work? What are the implications?"), you MUST address EACH sub-question separately and thoroughly.
-2. For EACH sub-question or aspect of the question:
-   - Provide a complete, detailed answer
-   - Include all relevant data, findings, and evidence from the subtask outputs
-   - Cite specific results, numbers, files, and analyses
-   - Do NOT skip or condense information
-3. Preserve the depth and detail from specialist analyses - do not over-summarize
-4. Include all relevant context, methodologies, and reasoning
+1. If the original question contains multiple sub-questions or parts, you MUST address EACH sub-question separately with extreme detail.
+
+2. For EACH sub-question or aspect:
+   - Provide a VERY LONG, thorough answer (aim for 300-1000+ words per major section)
+   - Extract and present ALL quantitative data from specialist outputs
+   - If a specialist listed 50 items, include all 50 (not "top 10")
+   - If a specialist calculated statistics, include ALL statistics with exact values
+   - Cite specific results, numbers, files, and analyses with precision
+
+3. **Length and Detail Expectations:**
+   - A comprehensive answer to a complex research question should be 3000-8000+ words
+   - Major sections should be 500-1500 words each
+   - Each significant finding (e.g., a target gene) deserves 100-300 words with full data
+   - Never say "and others" or "etc." when you can list all items
+
+4. Preserve the depth and detail from specialist analyses - expand on them, don't compress them
+
+5. Include all relevant context, methodologies, and reasoning - be pedagogical and thorough
 
 **Structure your answer with these sections:**
 
-1. **Answer to Each Question Component**
-   - If the question has multiple parts, create a subsection for EACH part
-   - For each part, provide the full, detailed answer drawing from all relevant subtask outputs
-   - Include all evidence, data, and citations for that specific question component
-   - Be thorough and comprehensive - aim for completeness, not brevity
+1. **Executive Summary** (if appropriate)
+   - Brief overview only (this is the ONLY place that can be brief)
 
-2. **Integrated Key Findings**
-   - Synthesize insights that span multiple question components
-   - Highlight connections and patterns across subtasks
-   - Preserve specific details, numbers, and evidence
+2. **Answer to Each Question Component** (MAJOR SECTION - BE EXTREMELY DETAILED)
+   - If the question has multiple parts (A, B, C, D), create a detailed subsection for EACH
+   - For each part:
+     * Provide complete methodology descriptions
+     * Present ALL data, statistics, and results (not summaries)
+     * Include complete gene/protein lists if applicable
+     * Show all statistical analyses with exact values
+     * Create tables if data is structured
+     * Cite specific files, tools, and analyses
+   - Each component should be 500-1500+ words depending on complexity
 
-3. **Red Flag Resolution** (if critical flags exist)
-   - For each flag: state what was done to resolve it across the rounds
-   - If a fix requires additional analysis, acknowledge and propose next steps
-   - If a flag is invalid, explain why
+3. **Detailed Findings by Category**
+   - If specialists identified targets/genes/pathways:
+     * Create a numbered subsection for EACH item
+     * Include: full name, description, quantitative evidence (all numbers), mechanism, context
+     * Example format for gene targets:
+       ```
+       TARGET #1: Gene Name
+       Intervention: Activate/Inhibit
+       RNA-seq Evidence:
+       - Baseline: X TPM
+       - Treatment: Y TPM
+       - Log2FC: +Z (FDR: P)
+       - Priority Score: Q
+       Function & Rationale: [200-400 words]
+       Evidence for Intervention: [100-200 words]
+       Mechanism: [100-200 words]
+       Druggability: [50-100 words if applicable]
+       ```
 
-4. **Evidence & Citations**
+4. **Complete Data Tables** (if applicable)
+   - Reproduce any tables from specialist outputs in full
+   - Don't summarize rows or collapse columns
+
+5. **Statistical Analysis Results**
+   - All correlation analyses with exact r and p values
+   - All differential expression results
+   - All enrichment analyses
+   - All model fits and goodness-of-fit metrics
+
+6. **Red Flag Resolution** (if critical flags exist)
+   - For each flag: detailed explanation of resolution
+   - If not fully resolved, provide thorough next steps
+
+7. **Evidence & Citations**
    - List all PMIDs, databases, files, and tools used
-   - Preserve all specific references from specialist work
+   - Group by category for organization
 
-5. **Limitations & Uncertainties**
-   - Acknowledge gaps in data or analysis
-   - Note areas requiring further investigation
+8. **Methodological Details**
+   - Algorithms, tools, parameters
+   - Statistical tests and thresholds
+   - Data processing steps
 
-6. **Recommended Next Steps** (if appropriate)
-   - Suggest concrete follow-up analyses or experiments
+9. **Limitations & Uncertainties**
+   - Acknowledge gaps with specificity
+   - Quantify uncertainties where possible
 
-**REMEMBER:**
-- DO NOT over-summarize or condense specialist findings
-- Each question component deserves a FULL, DETAILED answer
-- Include ALL relevant evidence, data points, and citations
-- Aim for thoroughness and completeness
-- The goal is to provide a comprehensive response that fully addresses every aspect of the original question
+10. **Recommended Next Steps** (if appropriate)
+    - Concrete, specific follow-up analyses
 
-Synthesize across all {num_rounds} rounds to provide the most complete and detailed answer possible."""
+**REMEMBER - MAXIMIZING DETAIL:**
+- If unsure whether to include something → INCLUDE IT
+- If a specialist listed 100 genes → include all 100 by name
+- If a specialist ran 20 tests → report all 20 results with exact values
+- If a specialist created a 50-row table → include the full 50-row table
+- Target length: 3000-8000+ words for complex questions
+- Each major finding should get its own detailed subsection (100-500 words)
+- NEVER use phrases like "and many others", "among others", "etc." when you can list all items
+- Prefer verbosity and completeness over conciseness
+
+The goal is to create a comprehensive technical report that preserves EVERY detail from specialist analyses."""
 
         self.logger.agent_action("PI", "Synthesizing final answer across all rounds", indent=2)
 
@@ -869,23 +963,55 @@ Synthesize across all {num_rounds} rounds to provide the most complete and detai
 {final_answer_internal}
 
 **Your Task:**
-Create a polished, publication-ready answer that:
-1. **Directly answers the research question** with an executive summary
-2. **Presents key findings** in a clear, well-organized manner
-3. **Integrates evidence** from all rounds seamlessly
-4. **Includes specific data, results, and citations** (PMIDs, files, databases)
-5. **Acknowledges limitations** where appropriate
-6. **Suggests next steps** if relevant
+Create a complete, detailed, publication-ready answer that PRESERVES ALL DETAIL from the internal synthesis.
 
 **CRITICAL REQUIREMENTS:**
-- Make the answer detailed, thorough, and comprehensive
-- Remove ALL meta-commentary about "red flags", "critique requirements", or "addressing concerns"
-- Remove sections like "Red Flag Resolution" - just integrate the fixes naturally
-- Focus on scientific content, not the review process
-- Be precise and evidence-based, but avoid redundancy
-- Write as if submitting to a scientific journal or grant review
 
-The answer should stand alone as a complete response without referencing the internal review process."""
+1. **Preserve ALL Detail - Do NOT Condense:**
+   - Keep ALL gene/protein lists complete (don't shorten to "top N")
+   - Keep ALL statistical values, tables, and quantitative results
+   - Keep ALL target/candidate descriptions with full details
+   - Keep ALL methodological details
+   - Maintain the LENGTH and COMPREHENSIVENESS of the internal synthesis
+
+2. **Remove Only Meta-Commentary:**
+   - Remove references to "red flags", "critique requirements", "addressing concerns"
+   - Remove sections like "Red Flag Resolution" - but keep the scientific content that addresses those issues
+   - Remove references to "rounds", "specialists", "PI synthesis", "critic review"
+   - Focus on scientific content, not the review process
+
+3. **Keep Scientific Content Intact:**
+   - If the internal synthesis has 18 targets with detailed descriptions → keep all 18 with full details
+   - If the internal synthesis has complete gene lists → preserve them exactly
+   - If the internal synthesis has statistical tables → reproduce them fully
+   - If the internal synthesis is 5000 words → the submission should be ~4500-5000 words (only meta-commentary removed)
+
+4. **Organization and Polish:**
+   - Improve formatting and section organization for readability
+   - Add clear headers and subsections
+   - Ensure logical flow between sections
+   - Fix any grammatical issues or awkward phrasing
+   - But DO NOT reduce content or compress information
+
+5. **Preserve Quantitative Precision:**
+   - Keep all exact numbers (TPM values, fold changes, p-values, correlations, etc.)
+   - Keep all complete lists (genes, proteins, targets, pathways, etc.)
+   - Keep all data tables in full
+   - Maintain all citations and references
+
+**Think of this as:**
+- Converting an internal research report → publication-ready manuscript
+- NOT converting a detailed report → executive summary
+- The goal is to PRESERVE detail while removing process commentary
+
+**Example Transformations:**
+❌ WRONG: "Round 2 specialists identified 18 targets (see red flag RF-2-3 resolution). Top targets include..."
+✅ RIGHT: "Analysis identified 18 rejuvenation targets along the exhaustion-aging axis. Detailed characterization of each target follows: TARGET #1: [full details]... TARGET #18: [full details]"
+
+❌ WRONG: "Exhaustion signature genes include Pdcd1, Havcr2, and others (n=29)"
+✅ RIGHT: "Exhaustion signature (29 genes): Pdcd1, Ctla4, Havcr2, Lag3, Tigit, Cd244, Btla, Cd160, Klrg1, Cd38, Tox, Tox2, Nr4a1, Nr4a2, Nr4a3, Nfatc1, Eomes, Ikzf2, Prdm1, Id2, Id3, Cxcl13, Cxcr6, Cxcr5, Entpd1, Layn, Vcam1, Cd101, Cd7"
+
+The answer should stand alone as a complete, comprehensive scientific response that preserves every detail from the analysis."""
 
         final_answer_submission = self.pi.run(submission_prompt, verbose=self.verbose)
 

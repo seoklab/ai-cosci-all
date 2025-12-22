@@ -1,0 +1,10 @@
+{
+  "question": "inhibitors antagonists Nr4a2 Nurr1 Slc17a6 VGLUT2 Spry1 Spry2 reversal T cell exhaustion",
+  "question_hash": "6997ee22cc8b",
+  "created_at": 1766378843.951689,
+  "last_used": 1766378843.9516897,
+  "settings": {
+    "llm": "openrouter/google/gemini-3-pro-preview",
+    "embedding": "st-multi-qa-MiniLM-L6-cos-v1"
+  }
+}

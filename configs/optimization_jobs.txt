@@ -1,0 +1,1 @@
+subtask-centric,2,2,30,r2_t2_i30

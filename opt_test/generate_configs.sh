@@ -9,8 +9,8 @@ mkdir -p "$(dirname "$OUTPUT_FILE")"
 # ============================================================================
 
 ROUNDS=(2)              # Rounds to test
-TEAM_SIZES=(3)        # Team sizes to test
-MAX_ITERS=(15 30)       # Max iterations to test
+TEAM_SIZES=(2)        # Team sizes to test
+MAX_ITERS=(30)       # Max iterations to test
 MODE="subtask-centric"  # Mode (subtask-centric or virtual-lab)
 
 # ============================================================================

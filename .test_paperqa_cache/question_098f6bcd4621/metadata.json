@@ -1,0 +1,9 @@
+{
+  "question": "test",
+  "question_hash": "098f6bcd4621",
+  "created_at": 1766153161.990447,
+  "settings": {
+    "llm": "openrouter/google/gemini-3-pro-preview",
+    "embedding": "st-multi-qa-MiniLM-L6-cos-v1"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "question": "What are the key molecular markers of T cell exhaustion?",
+  "question_hash": "352901d02923",
+  "created_at": 1766378473.5185833,
+  "last_used": 1766378473.5185835,
+  "settings": {
+    "llm": "openrouter/google/gemini-3-pro-preview",
+    "embedding": "st-multi-qa-MiniLM-L6-cos-v1"
+  }
+}
