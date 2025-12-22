@@ -2697,7 +2697,7 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                     "properties": {
                         "question": {
                             "type": "string",
-                            "description": "Research query for literature search. IMPORTANT: Use KEYWORD-BASED queries for better results, NOT full natural language questions. Examples: GOOD: 'AlphaFold protein structure prediction', 'EGFR inhibitor resistance mechanisms', 'RoseTTAFold deep learning'. BAD: 'What are the seminal papers for AlphaFold?', 'How does EGFR resistance work?'. Remove meta-language like 'papers about', 'research on', 'key studies'. Focus on core scientific terms and protein/gene names.",
+                            "description": "Research query for literature search. IMPORTANT: Use FULL SENTENCE questions. Examples: BAD: 'AlphaFold protein structure prediction', 'EGFR inhibitor resistance mechanisms', 'RoseTTAFold deep learning'. GOOD: 'What are the seminal papers for AlphaFold?', 'How does EGFR resistance work?'. Remove meta-language like 'papers about', 'research on', 'key studies'. Focus on core scientific terms and protein/gene names.",
                         },
                         "mode": {
                             "type": "string",
