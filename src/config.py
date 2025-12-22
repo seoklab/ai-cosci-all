@@ -37,9 +37,14 @@ class DataConfig:
 
     # PaperQA settings
     paperqa_llm: str = "openrouter/google/gemini-3-flash-preview"  # Model for PaperQA (via OpenRouter) - PAID model
-    paperqa_embedding: str = "st-multi-qa-MiniLM-L6-cos-v1"  # Local embedding (free, no API calls)
+    paperqa_embedding: str = (
+        "st-multi-qa-MiniLM-L6-cos-v1"  # Local embedding (free, no API calls)
+    )
     paperqa_max_sources: int = 5  # Maximum contexts to retrieve
-    use_paperqa_only: bool = True  # If True, use only search_literature (paper-qa) and disable search_pubmed
+    use_paperqa_only: bool = (
+        True  # If True, use only search_literature (paper-qa) and disable search_pubmed
+    )
+    s2_use_keywords: bool = True  # If True, extract keywords for Semantic Scholar; if False, use full question
 
     def __post_init__(self):
         """Validate that directories exist or can be created."""
@@ -77,17 +82,18 @@ def get_default_config() -> DataConfig:
     """
     return DataConfig(
         database_dir=os.getenv(
-            "DATABASE_DIR",
-            "/home.galaxy4/sumin/project/aisci/Competition_Data"
+            "DATABASE_DIR", "/home.galaxy4/sumin/project/aisci/Competition_Data"
         ),
         input_dir=os.getenv("INPUT_DIR", "./data"),
         paper_library_dir=os.getenv("PAPER_LIBRARY_DIR", "./papers"),
         pubmed_email=os.getenv("PUBMED_EMAIL"),
         pubmed_api_key=os.getenv("PUBMED_API_KEY"),
         paperqa_llm=os.getenv("PAPERQA_LLM", "openrouter/google/gemini-3-pro-preview"),
-        paperqa_embedding=os.getenv("PAPERQA_EMBEDDING", "st-multi-qa-MiniLM-L6-cos-v1"),
+        paperqa_embedding=os.getenv(
+            "PAPERQA_EMBEDDING", "st-multi-qa-MiniLM-L6-cos-v1"
+        ),
         paperqa_max_sources=int(os.getenv("PAPERQA_MAX_SOURCES", "5")),
-        use_paperqa_only=os.getenv("USE_PAPERQA_ONLY", "true").lower() == "true"
+        use_paperqa_only=os.getenv("USE_PAPERQA_ONLY", "true").lower() == "true",
     )
 
 
@@ -95,7 +101,7 @@ def create_custom_config(
     database_dir: Optional[str] = None,
     input_dir: Optional[str] = None,
     paper_library_dir: Optional[str] = None,
-    **kwargs
+    **kwargs,
 ) -> DataConfig:
     """
     Create a custom configuration, overriding default values.
@@ -119,8 +125,10 @@ def create_custom_config(
         pubmed_api_key=kwargs.get("pubmed_api_key", default.pubmed_api_key),
         paperqa_llm=kwargs.get("paperqa_llm", default.paperqa_llm),
         paperqa_embedding=kwargs.get("paperqa_embedding", default.paperqa_embedding),
-        paperqa_max_sources=kwargs.get("paperqa_max_sources", default.paperqa_max_sources),
-        use_paperqa_only=kwargs.get("use_paperqa_only", default.use_paperqa_only)
+        paperqa_max_sources=kwargs.get(
+            "paperqa_max_sources", default.paperqa_max_sources
+        ),
+        use_paperqa_only=kwargs.get("use_paperqa_only", default.use_paperqa_only),
     )
 
 
