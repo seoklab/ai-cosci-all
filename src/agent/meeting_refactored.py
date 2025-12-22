@@ -1102,13 +1102,14 @@ Synthesize across all {num_rounds} rounds to provide the most complete answer po
                 f"(Team: {', '.join(subtask['assigned_specialists'])}) [{status}]"
             )
         
+        joined_subtasks = "\n".join(all_subtasks)
         overview = f"""**RESEARCH OVERVIEW:**
 - Original Question: "{self.user_question}"
 - Final Goal: Provide a comprehensive, evidence-based answer to the research question
 - Research Strategy: Sequential subtask execution with specialist collaboration
 
 **ALL SUBTASKS IN THIS RESEARCH PLAN:**
-{'\n'.join(all_subtasks)}
+{joined_subtasks}
 
 **YOUR CURRENT POSITION:**
 You are executing Subtask {current_subtask_id}, which is part of a larger research effort.
