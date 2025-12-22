@@ -94,6 +94,14 @@ class BioinformaticsAgent:
    - Consider alternative explanations
 
 4. **Literature Integration** (CRITICAL):
+   - **STRATEGIC SEARCH APPROACH**:
+     * Limit to 1-2 BROAD literature searches per subtask - make each one count
+     * Use GENERAL, comprehensive queries for background domain knowledge
+     * GOOD: "What are epigenetic mechanisms in T cell exhaustion?"
+     * BAD: "Does Hist1h2ao methylation affect CD8+ T cell PD-1 expression?"
+     * If search doesn't find papers, your query is likely TOO SPECIFIC - broaden it
+     * Extract ALL relevant information from search results before considering another search
+     * It's up to YOU to decide if papers are useful - the tool provides background knowledge
    - **VERIFY BEFORE CITING**: If you reference a paper (e.g., "Philip et al., Nature 2017"), you MUST use `search_literature` to fetch and read it BEFORE making claims about its content
    - **Don't guess**: Never say "likely X paper says Y" - actually fetch and read the paper to confirm
    - Use `search_literature(mode='online')` to fetch papers from PubMed/arXiv if not in local library
@@ -533,7 +541,14 @@ You: "I think we should do differential expression analysis..." ← WRONG! Data 
 - read_file(): Read previous outputs
 - execute_python(): Analyze data, create plots
 - query_database(): Get context from databases
-- search_literature(): Find relevant papers
+- search_literature(): Find relevant papers (STRATEGIC USE: 1-2 BROAD searches per subtask, use GENERAL queries like "What are epigenetic mechanisms in T cell exhaustion?" NOT hyper-specific like "Does Hist1h2ao methylation affect PD-1?")
 - search_pubmed(): Quick literature searches
+
+## Literature Search Strategy (CRITICAL)
+- **Limit searches**: 1-2 BROAD queries per subtask maximum
+- **Use GENERAL questions**: Get background domain knowledge, not ultra-specific answers
+- **Extract everything**: Read ALL relevant information from results before searching again
+- **You decide usefulness**: The tool provides background - it's up to you to apply it
+- **If no papers found**: Your query is TOO SPECIFIC - broaden it
 
 Remember: You are ONE specialist in a SEQUENTIAL workflow. Build on what came before, execute YOUR subtask, and prepare outputs for what comes next."""

@@ -3360,13 +3360,17 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                         if config.use_paperqa_only
                         else "**USE THIS TO VERIFY PAPERS BEFORE CITING THEM**. PRIORITIZES local PDF library first, then supplements with online databases (PubMed, arXiv) if needed. Reads full-text papers and generates evidence-based answers with citations. More rigorous than search_pubmed - use this when you need detailed, cited information from research papers."
                     )
-                    + " Default 'auto' mode checks local PDFs first and only searches online if local papers don't provide a good answer.",
+                    + " Default 'auto' mode checks local PDFs first and only searches online if local papers don't provide a good answer. **SEARCH STRATEGY**: Use BROAD queries to get background domain knowledge (1-2 searches per subtask max). Let the tool find relevant papers - don't fixate on ultra-specific keywords. Extract ALL relevant information from results before considering another search.",
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "question": {
                                 "type": "string",
+<<<<<<< HEAD
                                 "description": "Provide a concise research query (one short sentence or phrase) containing only the key concepts or keywords needed for the search. Avoid verbose wording or extra qualifiers. Examples: 'What is AlphaFold?', 'EGFR inhibitor resistance'.",
+=======
+                                "description": "Research query for literature search. **CRITICAL**: Use BROAD, GENERAL questions to get domain knowledge - NOT hyper-specific queries. GOOD: 'What are epigenetic mechanisms in T cell exhaustion?', 'How does immune checkpoint blockade work?', 'What regulates CD8+ T cell dysfunction?'. BAD: 'Does Hist1h2ao methylation affect CD8+ T cell PD-1 expression?', 'SETD2 chromatin remodeling exhausted T cells'. Use full sentences. If the tool doesn't find papers, it's likely because your query is TOO SPECIFIC - broaden it. Remove meta-language like 'papers about', 'research on'.",
+>>>>>>> f1366e7 (lit search prompt fix)
                             },
                             "mode": {
                                 "type": "string",

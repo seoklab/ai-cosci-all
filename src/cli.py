@@ -564,7 +564,11 @@ Examples:
                 save_intermediate=args.save_intermediate,
             )
 
-            logger.section("FINAL ANSWER (PI Synthesis with Red Flag Resolution)")
+            logger.section("FINAL SUBMISSION ANSWER")
+            logger.info("(Clean version without internal review commentary)", indent=2)
+            if args.save_intermediate:
+                logger.info("(Internal version with red flag resolution saved separately)", indent=2)
+            print()
             print(final_answer)
 
             # Auto-evaluate
@@ -587,7 +591,8 @@ Examples:
             logger.print_elapsed_time()
 
         elif args.subtask_centric:
-            # Subtask-Centric Virtual Lab mode - sequential research plan-driven collaboration
+            # Note: This block seems to be unreachable due to earlier subtask_centric handling
+            # Keeping for compatibility, but consider removing in future refactor
             print("\n" + "=" * 60)
             print("SUBTASK-CENTRIC VIRTUAL LAB MODE")
             print("=" * 60)
@@ -618,8 +623,10 @@ Examples:
             )
 
             print("\n" + "=" * 60)
-            print("FINAL ANSWER (PI Synthesis with Red Flag Resolution):")
+            print("FINAL SUBMISSION ANSWER:")
             print("=" * 60)
+            if args.save_intermediate:
+                print("(Internal version with red flag resolution saved separately)\n")
             print(final_answer)
 
             # Save to file
@@ -785,13 +792,18 @@ Examples:
                     data_dir=args.data_dir,
                     input_dir=args.input_dir,
                     max_iterations=args.max_iterations,
+                    save_intermediate=args.save_intermediate,
                 )
 
-                logger.section("FINAL ANSWER (with Red Flag Resolution)")
+                logger.section("FINAL SUBMISSION ANSWER")
+                if args.save_intermediate:
+                    logger.info("(Internal version with red flag resolution saved separately)", indent=2)
 
                 print("\n" + "=" * 60)
-                print("FINAL ANSWER (with Red Flag Resolution):")
+                print("FINAL SUBMISSION ANSWER:")
                 print("=" * 60)
+                if args.save_intermediate:
+                    print("(Internal version with red flag resolution saved separately)\n")
                 print(final_answer)
 
                 # Auto-save in interactive mode
