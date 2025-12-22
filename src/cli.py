@@ -550,6 +550,11 @@ Examples:
             print(f"Configuration: {args.rounds} rounds, max {args.team_size} specialists")
             print("=" * 60)
 
+            # Create run-specific output directory
+            output_mgr = get_output_manager()
+            run_dir = output_mgr.create_run_directory(args.question, mode="virtual-lab")
+            print(f"Output directory: {run_dir}\n")
+
             final_answer = run_virtual_lab(
                 question=args.question,
                 api_key=args.api_key,
@@ -692,6 +697,11 @@ Examples:
                 print("\n" + "=" * 60)
                 print("VIRTUAL LAB MEETING")
                 print("=" * 60)
+
+                # Create run-specific output directory
+                output_mgr = get_output_manager()
+                run_dir = output_mgr.create_run_directory(question, mode="virtual-lab")
+                print(f"Output directory: {run_dir}\n")
 
                 final_answer = run_virtual_lab(
                     question=question,
