@@ -3366,11 +3366,7 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                         "properties": {
                             "question": {
                                 "type": "string",
-<<<<<<< HEAD
-                                "description": "Provide a concise research query (one short sentence or phrase) containing only the key concepts or keywords needed for the search. Avoid verbose wording or extra qualifiers. Examples: 'What is AlphaFold?', 'EGFR inhibitor resistance'.",
-=======
                                 "description": "Research query for literature search. **CRITICAL**: Use BROAD, GENERAL questions to get domain knowledge - NOT hyper-specific queries. GOOD: 'What are epigenetic mechanisms in T cell exhaustion?', 'How does immune checkpoint blockade work?', 'What regulates CD8+ T cell dysfunction?'. BAD: 'Does Hist1h2ao methylation affect CD8+ T cell PD-1 expression?', 'SETD2 chromatin remodeling exhausted T cells'. Use full sentences. If the tool doesn't find papers, it's likely because your query is TOO SPECIFIC - broaden it. Remove meta-language like 'papers about', 'research on'.",
->>>>>>> f1366e7 (lit search prompt fix)
                             },
                             "mode": {
                                 "type": "string",
