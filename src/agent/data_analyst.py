@@ -6,6 +6,8 @@ that can participate in VirtualLab meetings.
 """
 
 import os
+import re
+import json
 import sys
 import traceback
 import yaml
@@ -228,16 +230,32 @@ class DataAnalystAgent(ScientificAgent):
             import subprocess
             import shutil
             
-            # Discover CSV files
+            # Discover CSV files from ORIGINAL data directory
             self.logger.info(f"Discovering CSV files in: {self.input_dir}", indent=2)
-            data_files = self._discover_data_files()
+            original_data_files = self._discover_data_files()
             
-            if not data_files:
+            if not original_data_files:
                 error_msg = f"[{self.persona.title}] No CSV files found in {self.input_dir}"
                 self.logger.error(error_msg, indent=2)
                 return error_msg
             
-            self.logger.success(f"Found {len(data_files)} CSV files", indent=2)
+            self.logger.success(f"Found {len(original_data_files)} original CSV files", indent=2)
+            
+            # IMPORTANT: Also discover CSV files from current run's OUTPUT_DIR (previous subtask results)
+            from src.utils.output_manager import get_current_run_dir
+            current_run_dir = get_current_run_dir()
+            previous_subtask_csvs = []
+            
+            if current_run_dir:
+                output_path = Path(current_run_dir)
+                if output_path.exists():
+                    previous_subtask_csvs = list(output_path.glob("*.csv"))
+                    if previous_subtask_csvs:
+                        self.logger.success(f"Found {len(previous_subtask_csvs)} CSV files from previous subtasks", indent=2)
+                        for csv in previous_subtask_csvs[:5]:  # Log first 5
+                            self.logger.verbose(f"  - {csv.name}", indent=4)
+                        if len(previous_subtask_csvs) > 5:
+                            self.logger.verbose(f"  ... and {len(previous_subtask_csvs) - 5} more", indent=4)
             
             # Create config for subprocess
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -247,13 +265,84 @@ class DataAnalystAgent(ScientificAgent):
             runs_dir = project_root / "outputs" / "dsstar_runs" / run_id
             runs_dir.mkdir(parents=True, exist_ok=True)
             
+            # STEP 1: Extract embedded data from query (JSON matrices, etc.)
+            # ONLY extracted data goes to isolated dir - original files are read directly!
+            isolated_data_dir = runs_dir / "data_extracted"
+            isolated_data_dir.mkdir(exist_ok=True)
+            
+            import json
+            extracted_csvs = []
+            
+            # Look for JSON data structures in the query (e.g., correlation matrices)
+            json_pattern = r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}'
+            json_matches = re.findall(json_pattern, question, re.DOTALL)
+            
+            for idx, json_str in enumerate(json_matches):
+                try:
+                    data = json.loads(json_str)
+                    # Check if it's a matrix-like structure
+                    if isinstance(data, dict) and len(data) > 0:
+                        first_val = next(iter(data.values()))
+                        if isinstance(first_val, dict):  # Likely a correlation matrix
+                            import pandas as pd
+                            df = pd.DataFrame(data)
+                            
+                            # Save extracted data to isolated dir
+                            filename = f"extracted_matrix_{idx}_{timestamp}.csv"
+                            csv_path = isolated_data_dir / filename
+                            df.to_csv(csv_path)
+                            extracted_csvs.append(str(csv_path.resolve()))  # Absolute path
+                            
+                            self.logger.success(f"Extracted matrix data to {filename}", indent=4)
+                            self.logger.verbose(f"  Shape: {df.shape}", indent=4)
+                except:
+                    continue  # Not valid JSON or not processable
+            
+            # STEP 2: Build file list with ABSOLUTE PATHS (no copying!)
+            all_data_files = []
+            
+            # ALWAYS include original data files (so DS-Star can see raw data in all rounds)
+            for f in original_data_files:
+                all_data_files.append(str(f.resolve()))
+            
+            self.logger.info(f"Including {len(original_data_files)} original data files", indent=2)
+            
+            # ADDITIONALLY include previous subtask results if available
+            if previous_subtask_csvs:
+                for csv in previous_subtask_csvs:
+                    all_data_files.append(str(csv.resolve()))
+                    self.logger.verbose(f"Adding {csv.name} from previous subtask", indent=4)
+                
+                self.logger.info(f"+ {len(previous_subtask_csvs)} files from previous subtasks", indent=2)
+            
+            # Add extracted CSV files from query
+            all_data_files.extend(extracted_csvs)
+            if extracted_csvs:
+                self.logger.info(f"+ {len(extracted_csvs)} extracted files from query", indent=2)
+            
+            # Remove duplicates while preserving order
+            all_data_files = list(dict.fromkeys(all_data_files))
+            
+            self.logger.success(f"Total data files for DS-Star: {len(all_data_files)}", indent=2)
+            for f in all_data_files[:5]:
+                self.logger.verbose(f"  - {Path(f).name}", indent=4)
+            if len(all_data_files) > 5:
+                self.logger.verbose(f"  ... and {len(all_data_files) - 5} more", indent=4)
+            
+            # Restructure query: Original Question → Subtask → Guidance
+            restructured_query = self._restructure_query_for_dsstar(question)
+            
+            # Use ORIGINAL input_dir as data_dir (files are read directly from here)
+            # Output will still go to isolated exec_dir (dsstar.py handles this)
+            original_input_dir = Path(self.input_dir).resolve()
+            
             config_data = dict(self.dsstar_base_config)
             config_data.update({
                 'run_id': run_id,
                 'runs_dir': str(runs_dir),
-                'data_dir': str(Path(self.input_dir).resolve()),
-                'query': question,
-                'data_files': [f.name for f in data_files],
+                'data_dir': str(original_input_dir),  # READ from original input_dir!
+                'query': restructured_query,
+                'data_files': all_data_files,
                 'interactive': False,
                 'preserve_artifacts': True
             })
@@ -285,6 +374,19 @@ class DataAnalystAgent(ScientificAgent):
                 return super().run(question, verbose)
             
             self.logger.success("DS-Star completed", indent=2)
+            
+            # CRITICAL: Copy DS-Star results to VirtualLab common output directory
+            from src.utils.output_manager import get_current_run_dir
+            common_output_dir = get_current_run_dir()
+            
+            # Copy useful files from exec_env (where DS-Star actually writes)
+            exec_env_dir = runs_dir / run_id / "exec_env"
+            if exec_env_dir.exists() and common_output_dir:
+                common_output_path = Path(common_output_dir)
+                for csv_file in exec_env_dir.glob("*.csv"):
+                    dest = common_output_path / csv_file.name
+                    shutil.copy(csv_file, dest)
+                    self.logger.info(f"Copied {csv_file.name} to common output", indent=2)
             
             # Collect results
             output_dir = runs_dir / run_id / "final_output"
@@ -324,6 +426,116 @@ class DataAnalystAgent(ScientificAgent):
             self.logger.error(f"DS-Star error: {e}", indent=2)
             return super().run(question, verbose)
 
+    def _restructure_query_for_dsstar(self, question: str) -> str:
+        """
+        Restructure query for DS-Star with prioritized ordering:
+        1. Original Question (PRIMARY SOURCE)
+        2. Subtask Description
+        3. Important Guidance
+        4. Rest (context, expected outputs, etc.)
+        
+        Args:
+            question: The full question from VirtualLab (includes original Q, subtask, etc.)
+            
+        Returns:
+            Restructured query string with proper ordering
+        """
+        import re
+        
+        # Extract components using regex
+        original_q_match = re.search(
+            r'\*\*ORIGINAL RESEARCH QUESTION \(PRIMARY SOURCE[^)]*\):\*\*\s*(.+?)(?=\n\*\*|\Z)',
+            question,
+            re.DOTALL
+        )
+        
+        subtask_match = re.search(
+            r'\*\*SUBTASK (\d+):\*\*\s*(.+?)(?=\n\*\*|\Z)',
+            question,
+            re.DOTALL
+        )
+        
+        guidance_match = re.search(
+            r'\*\*IMPORTANT GUIDANCE:\*\*\s*(.+?)(?=\n\*\*|\Z)',
+            question,
+            re.DOTALL
+        )
+        
+        expected_outputs_match = re.search(
+            r'\*\*Expected Outputs:\*\*\s*(.+?)(?=\n\*\*|\Z)',
+            question,
+            re.DOTALL
+        )
+        
+        context_match = re.search(
+            r'\*\*Context from Previous Subtasks:\*\*\s*(.+?)(?=\n\*\*|\Z)',
+            question,
+            re.DOTALL
+        )
+        
+        your_task_match = re.search(
+            r'\*\*Your Task:\*\*\s*(.+?)(?=\Z)',
+            question,
+            re.DOTALL
+        )
+        
+        # Build restructured query in desired order
+        parts = []
+        
+        # 1. Original Question (FIRST and MOST IMPORTANT)
+        if original_q_match:
+            original_q = original_q_match.group(1).strip()
+            parts.append("=" * 70)
+            parts.append("ORIGINAL RESEARCH QUESTION (PRIMARY SOURCE)")
+            parts.append("=" * 70)
+            parts.append(original_q)
+            parts.append("")
+        
+        # 2. Subtask Description (SECOND - what you need to do)
+        if subtask_match:
+            subtask_id = subtask_match.group(1)
+            subtask_desc = subtask_match.group(2).strip()
+            parts.append("=" * 70)
+            parts.append(f"YOUR ASSIGNED SUBTASK (Subtask {subtask_id})")
+            parts.append("=" * 70)
+            parts.append(subtask_desc)
+            parts.append("")
+        
+        # 3. Important Guidance (THIRD - how to approach)
+        if guidance_match:
+            guidance = guidance_match.group(1).strip()
+            parts.append("=" * 70)
+            parts.append("IMPORTANT GUIDANCE")
+            parts.append("=" * 70)
+            parts.append(guidance)
+            parts.append("")
+        
+        # 4. Expected Outputs
+        if expected_outputs_match:
+            outputs = expected_outputs_match.group(1).strip()
+            parts.append("**Expected Outputs:**")
+            parts.append(outputs)
+            parts.append("")
+        
+        # 5. Context from Previous Work
+        if context_match:
+            context = context_match.group(1).strip()
+            parts.append("**Context from Previous Subtasks:**")
+            parts.append(context)
+            parts.append("")
+        
+        # 6. Your Task (execution instructions)
+        if your_task_match:
+            task = your_task_match.group(1).strip()
+            parts.append("**Your Task:**")
+            parts.append(task)
+        
+        # If parsing failed, return original
+        if not parts:
+            return question
+        
+        return "\n".join(parts)
+    
     def _discover_data_files(self) -> List[Path]:
         """
         Discover CSV files in the input directory.

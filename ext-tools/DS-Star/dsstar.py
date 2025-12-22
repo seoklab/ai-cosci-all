@@ -25,14 +25,14 @@ with open(_DSSTAR_DIR / "prompt.yaml", "r") as f:
 class DSConfig:
     """Centralized configuration for the entire pipeline."""
     run_id: str = None
-    max_refinement_rounds: int = 3
+    max_refinement_rounds: int = 8
     api_key: Optional[str] = None
     model_name: str = None
     interactive: bool = False
     auto_debug: bool = True
     # debug attempts defaults to 3
     debug_attempts: float = 3
-    execution_timeout: int = 60
+    execution_timeout: int = 600
     preserve_artifacts: bool = True
     runs_dir: str = "runs"
     data_dir: str = "data"
@@ -337,15 +337,23 @@ class DS_STAR_Agent:
         exec_path.write_text(code_script, encoding='utf-8')
         
         try:
-            # This allows pd.read_csv('file.csv') to find files in data_dir
-            execution_cwd = Path(self.config.data_dir).resolve()
+            # CRITICAL: Execute in exec_dir (isolated), NOT in data_dir (input_dir)!
+            # This prevents polluting the original data directory with outputs.
+            # Data files are passed as absolute paths, so they can still be read.
+            execution_cwd = self.exec_dir.resolve()
+            
+            # Pass DATA_DIR as environment variable so generated code can reference it
+            env = os.environ.copy()
+            env['DATA_DIR'] = str(Path(self.config.data_dir).resolve())
+            env['OUTPUT_DIR'] = str(execution_cwd)  # Also pass output directory
             
             result = subprocess.run(
                 [sys.executable, str(exec_path)],
                 capture_output=True,
                 text=True,
                 timeout=self.config.execution_timeout,
-                cwd=str(execution_cwd)  # Execute in data_dir, not project root
+                cwd=str(execution_cwd),  # Execute in isolated exec_dir, protecting input_dir
+                env=env  # Pass environment with DATA_DIR and OUTPUT_DIR
             )
             
             if result.returncode == 0:
@@ -644,13 +652,13 @@ def main():
     config_params = {
         'run_id': args.resume or config_defaults.get('run_id'),
         'interactive': args.interactive or config_defaults.get('interactive', False),
-        'max_refinement_rounds': args.max_rounds or config_defaults.get('max_refinement_rounds', 5),
+        'max_refinement_rounds': args.max_rounds or config_defaults.get('max_refinement_rounds', 8),
         'model_name': config_defaults.get('model_name'),
         'preserve_artifacts': config_defaults.get('preserve_artifacts', True),
         'api_key': config_defaults.get('api_key'),
         'auto_debug': config_defaults.get('auto_debug', True),
         'debug_attempts': config_defaults.get('debug_attempts', float('inf')),
-        'execution_timeout': config_defaults.get('execution_timeout', 60),
+        'execution_timeout': config_defaults.get('execution_timeout', 600),
         'runs_dir': config_defaults.get('runs_dir', 'runs'),
         'data_dir': config_defaults.get('data_dir', 'data'),
         'code_library_dir': config_defaults.get('code_library_dir', 'code_library'),

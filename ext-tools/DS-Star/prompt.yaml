@@ -53,8 +53,30 @@ coder_init: |
   {summaries}
   # Plan
   {plan}
+  
+  # CRITICAL: Large Data Optimization Guidelines
+  ALWAYS check data size FIRST before expensive operations:
+  1. Load data and print shape: df.shape, len(df)
+  2. If N > 10,000 rows/genes:
+     - For pairwise operations (correlation, distance): Use vectorized methods (numpy, scipy) NOT loops
+     - Example: np.corrcoef(data.T) instead of nested for loops
+     - If still too slow (N > 50,000): Sample top-k (e.g., top 5000 by variance/expression)
+  3. For gene-gene correlation: Use df.corr() instead of nested loops
+  4. Print intermediate shapes to track size
+  5. Avoid O(N²) loops - they timeout on large data!
+  
+  # CRITICAL: File I/O Rules (NEVER VIOLATE!)
+  - READ: Use absolute paths provided in file list (input data is READ-ONLY!)
+  - WRITE: ALWAYS use relative paths - just filename like 'result.csv' NOT '/path/to/result.csv'
+  - NEVER save to input data directories
+  - Current directory is isolated - all outputs automatically go to safe location
+  - Example GOOD: df.to_csv('expression_correlations.csv')
+  - Example BAD: df.to_csv('/data/.../Q1/expression_correlations.csv')
+  
   #Your task
   Implement the plan with the given data.
+  CHECK DATA SIZE FIRST. Use efficient methods for large data.
+  SAVE OUTPUTS with relative paths ONLY (e.g., 'output.csv', NOT '/abs/path/output.csv').
   Your response should be a single markdown Python code (wrapped in).
   There should be no additional headings or text in your response.
 coder_next: |
@@ -70,10 +92,32 @@ coder_next: |
   {plan}
   # Current plan to implement
   {current_plan}
+  
+  # CRITICAL: Large Data Optimization Guidelines
+  ALWAYS check data size FIRST before expensive operations:
+  1. Load data and print shape: df.shape, len(df)
+  2. If N > 5,000 rows/genes:
+     - For pairwise operations (correlation, distance): Use vectorized methods (numpy, scipy) NOT loops
+     - Example: np.corrcoef(data.T) instead of nested for loops
+     - If still too slow (N > 20,000): Sample top-k (e.g., top 1000 by variance/expression)
+  3. For gene-gene correlation: Use df.corr() instead of nested loops
+  4. Print intermediate shapes to track size
+  5. Avoid O(N²) loops - they timeout on large data!
+  
+  # CRITICAL: File I/O Rules (NEVER VIOLATE!)
+  - READ: Use absolute paths provided in file list (input data is READ-ONLY!)
+  - WRITE: ALWAYS use relative paths - just filename like 'result.csv' NOT '/path/to/result.csv'
+  - NEVER save to input data directories
+  - Current directory is isolated - all outputs automatically go to safe location
+  - Example GOOD: df.to_csv('expression_correlations.csv')
+  - Example BAD: df.to_csv('/data/.../Q1/expression_correlations.csv')
+  
   #Your task
   Implement the current plan with the given data.
   The implementation should be done based on the base code.
   The base code is an implementation of the previous plans.
+  CHECK DATA SIZE FIRST. Use efficient methods for large data.
+  SAVE OUTPUTS with relative paths ONLY (e.g., 'output.csv', NOT '/abs/path/output.csv').
   Your response should be a single markdown Python code (wrapped in).
   There should be no additional headings or text in your response.
 verifier: |
