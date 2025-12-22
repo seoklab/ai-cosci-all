@@ -165,13 +165,18 @@ class VirtualLabMeeting:
                 output_dir_info = f"""
 **FILE LOCATIONS (CRITICAL):**
 - All files from this run are in: `{run_dir}`
-- When reading files from previous subtasks, use: `{{OUTPUT_DIR}}/filename.csv` in execute_python
-- When mentioning files in your text responses, ALWAYS include the full path or {{OUTPUT_DIR}} prefix
-- Example: Say "Results saved to {{OUTPUT_DIR}}/analysis.csv" NOT just "analysis.csv"
+- When reading files from previous subtasks, use: `{run_dir}/filename.csv` in execute_python
+- When mentioning files in your text responses, ALWAYS include the full path or {run_dir} prefix
+- Example: Say "Results saved to {run_dir}/analysis.csv" NOT just "analysis.csv"
 """
 
+            # Create overview context for this subtask
+            overview_context = self._create_overview_context(subtask_id)
+
             # Construct subtask prompt with full context
-            subtask_prompt = f"""**SUBTASK {subtask_id}:** {description}
+            subtask_prompt = f"""{overview_context}
+
+**SUBTASK {subtask_id}:** {description}
 
 **Expected Outputs:** {', '.join(expected_outputs)}
 {output_dir_info}
@@ -269,7 +274,12 @@ Use tools as needed. Be concise but thorough."""
 - When mentioning files in your text responses, ALWAYS include the full path or {{OUTPUT_DIR}} prefix
 """
 
-        initial_prompt = f"""**COLLABORATIVE SUBTASK {subtask_id}:** {description}
+        # Create overview context for this subtask
+        overview_context = self._create_overview_context(subtask_id)
+
+        initial_prompt = f"""{overview_context}
+
+**COLLABORATIVE SUBTASK {subtask_id}:** {description}
 
 **Expected Outputs:** {', '.join(expected_outputs)}
 {output_dir_info}
@@ -1068,6 +1078,45 @@ Synthesize across all {num_rounds} rounds to provide the most complete answer po
             return final_answer + "\n" + "\n".join(references_parts)
         else:
             return final_answer
+
+    def _create_overview_context(self, current_subtask_id: int) -> str:
+        """Create overview context explaining the research question, goals, and subtask position.
+        
+        Args:
+            current_subtask_id: The current subtask being executed
+            
+        Returns:
+            Formatted overview context string
+        """
+        # Create subtasks overview
+        all_subtasks = []
+        for subtask in self.research_plan:
+            status = "CURRENT" if subtask['subtask_id'] == current_subtask_id else ""
+            if subtask['subtask_id'] < current_subtask_id:
+                status = "COMPLETED"
+            elif subtask['subtask_id'] > current_subtask_id:
+                status = "PENDING"
+                
+            all_subtasks.append(
+                f"  {subtask['subtask_id']}. {subtask['description']} "
+                f"(Team: {', '.join(subtask['assigned_specialists'])}) [{status}]"
+            )
+        
+        overview = f"""**RESEARCH OVERVIEW:**
+- Original Question: "{self.user_question}"
+- Final Goal: Provide a comprehensive, evidence-based answer to the research question
+- Research Strategy: Sequential subtask execution with specialist collaboration
+
+**ALL SUBTASKS IN THIS RESEARCH PLAN:**
+{'\n'.join(all_subtasks)}
+
+**YOUR CURRENT POSITION:**
+You are executing Subtask {current_subtask_id}, which is part of a larger research effort.
+Each subtask builds on previous work to collectively answer the original question."""
+
+        return overview
+
+    # ...existing code...
 
 
 def run_virtual_lab(
