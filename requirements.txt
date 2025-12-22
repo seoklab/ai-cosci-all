@@ -7,6 +7,20 @@ pytest==7.4.3
 ipython==8.16.0
 ipykernel==6.26.0
 jupyter==1.0.0
-paper-qa>=5.0.0
 matplotlib==3.8.0
 langgraph
+paper-qa>=5.0.0
+
+
+# DS-Star dependencies (for ext-tools/DS-Star integration)
+pydantic>=2.12.0
+PyYAML>=6.0
+tqdm>=4.67.0
+openai>=2.8.1  # Required for OpenRouter support
+openpyxl>=3.1.5
+ollama>=0.6.1
+numpy>=1.26.0
+scipy>=1.11.0
+seaborn>=0.13.0
+scikit-learn>=1.3.0
+statsmodels>=0.14.0

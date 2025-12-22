@@ -263,6 +263,11 @@ Examples:
         help="Maximum iterations per agent for tool use (default: 30, useful for testing with lower values)",
     )
     parser.add_argument(
+        "--use-dsstar",
+        action="store_true",
+        help="Enable DS-Star data analysis specialist (default: disabled)",
+    )
+    parser.add_argument(
         "--api-key",
         type=str,
         help="API key (Anthropic or OpenRouter, or set env var)",
@@ -486,7 +491,8 @@ Examples:
                 data_dir=args.data_dir,
                 input_dir=args.input_dir,
                 max_iterations=args.max_iterations,
-                save_intermediate=args.save_intermediate
+                save_intermediate=args.save_intermediate,
+                use_dsstar=args.use_dsstar
             )
 
             logger.section("FINAL ANSWER (PI Synthesis with Red Flag Resolution)")

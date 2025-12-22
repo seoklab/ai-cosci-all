@@ -9,6 +9,10 @@ from src.agent.team_manager_refactored import (
     create_pi_persona,
     create_critic_persona,
 )
+
+# DS-Star integration (optional)
+from src.agent.data_analyst import DataAnalystAgent
+DSSTAR_AVAILABLE = True
 from src.utils.logger import get_logger
 from src.utils.output_manager import get_current_run_dir
 
@@ -36,7 +40,8 @@ class VirtualLabMeeting:
         data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
         input_dir: Optional[str] = None,
         max_iterations: int = 30,
-        save_intermediate: bool = False
+        save_intermediate: bool = False,
+        use_dsstar: bool = False
     ):
         self.user_question = user_question
         self.verbose = verbose
@@ -47,6 +52,7 @@ class VirtualLabMeeting:
         self.input_dir = input_dir if input_dir is not None else data_dir
         self.max_iterations = max_iterations
         self.save_intermediate = save_intermediate
+        self.use_dsstar = use_dsstar
         self.logger = get_logger()
 
         self.logger.subsection("INITIALIZING SUBTASK-CENTRIC VIRTUAL LAB")
@@ -95,6 +101,63 @@ class VirtualLabMeeting:
             )
             for spec in team_specs
         }
+
+        # Initialize DS-Star tracking
+        self.dsstar_subtask_id = None
+        
+        # Add DS-Star Data Analyst to specialist pool if enabled and data analysis keywords detected
+        if self.use_dsstar and DSSTAR_AVAILABLE and self._needs_data_analysis():
+            self.logger.progress("Adding DS-Star Data Analysis Specialist to team")
+
+            dsstar_analyst = DataAnalystAgent(
+                api_key=api_key,
+                model=model,
+                provider=provider,
+                data_dir=data_dir,
+                input_dir=self.input_dir
+            )
+            dsstar_name = "Data Analysis Specialist (DS-Star)"
+            self.specialists[dsstar_name] = dsstar_analyst
+            self.logger.info(f"→ DS-Star specialist added (total: {len(self.specialists)} specialists)", indent=2)
+            
+            # NEW STRATEGY: Assign DS-Star to AT MOST ONE subtask
+            # Select the MOST data-intensive subtask (prioritize pure computation)
+            best_subtask = None
+            best_score = -1
+            
+            for subtask in self.research_plan:
+                needs_computation = self._subtask_needs_data_analysis(subtask['description'])
+                
+                if needs_computation:
+                    is_pure_computation = self._is_pure_computational_task(subtask['description'])
+                    
+                    # Scoring: pure computation = 10, mixed = 5
+                    score = 10 if is_pure_computation else 5
+                    
+                    if score > best_score:
+                        best_score = score
+                        best_subtask = subtask
+            
+            # Assign DS-Star to the single best subtask
+            if best_subtask is not None:
+                is_pure = best_score == 10
+                
+                if is_pure:
+                    # DS-Star works ALONE for pure computational tasks
+                    best_subtask['assigned_specialists'] = [dsstar_name]
+                    self.logger.info(f"→ DS-Star assigned to Subtask {best_subtask['subtask_id']} (solo execution - pure computation)", indent=2)
+                else:
+                    # MIXED task: DS-Star joins the team but doesn't replace others
+                    # INSERT at the beginning so DS-Star runs FIRST in collaboration
+                    if dsstar_name not in best_subtask['assigned_specialists']:
+                        best_subtask['assigned_specialists'].insert(0, dsstar_name)
+                        self.logger.info(f"→ DS-Star added to Subtask {best_subtask['subtask_id']} team (collaboration mode - will execute FIRST)", indent=2)
+                
+                # Store which subtask DS-Star is assigned to (for prompt customization)
+                self.dsstar_subtask_id = best_subtask['subtask_id']
+            else:
+                self.dsstar_subtask_id = None
+                self.logger.warning("→ DS-Star enabled but no suitable subtask found", indent=2)
 
         # Add the Scientific Critic
         self.critic = ScientificAgent(
@@ -170,11 +233,27 @@ class VirtualLabMeeting:
 - Example: Say "Results saved to {{OUTPUT_DIR}}/analysis.csv" NOT just "analysis.csv"
 """
 
+            # DS-Star enhancement: Include original question for context
+            dsstar_context = ""
+            if self.use_dsstar and hasattr(self, 'dsstar_subtask_id') and subtask_id == self.dsstar_subtask_id:
+                dsstar_context = f"""
+
+**ORIGINAL RESEARCH QUESTION (PRIMARY SOURCE - MOST RELIABLE):**
+{self.user_question}
+
+**IMPORTANT GUIDANCE:**
+- The ORIGINAL QUESTION above is the ground truth and should be your PRIMARY guide
+- The subtask description below is a PI's interpretation - it may be incomplete or slightly imprecise
+- If there's any conflict between the subtask and original question, PRIORITIZE the original question
+- Your goal: Address the subtask WHILE staying true to the original question's intent
+- Use the original question to understand context, scope, and what truly matters
+"""
+
             # Construct subtask prompt with full context
             subtask_prompt = f"""**SUBTASK {subtask_id}:** {description}
 
 **Expected Outputs:** {', '.join(expected_outputs)}
-{output_dir_info}
+{output_dir_info}{dsstar_context}
 **Context from Previous Subtasks:**
 {dependency_context if dependency_context else "This is the first subtask - no previous context."}
 
@@ -269,10 +348,26 @@ Use tools as needed. Be concise but thorough."""
 - When mentioning files in your text responses, ALWAYS include the full path or {{OUTPUT_DIR}} prefix
 """
 
+        # DS-Star enhancement: Include original question for context (sub-meeting version)
+        dsstar_context = ""
+        if self.use_dsstar and hasattr(self, 'dsstar_subtask_id') and subtask_id == self.dsstar_subtask_id:
+            dsstar_context = f"""
+
+**ORIGINAL RESEARCH QUESTION (PRIMARY SOURCE - MOST RELIABLE):**
+{self.user_question}
+
+**IMPORTANT GUIDANCE:**
+- The ORIGINAL QUESTION above is the ground truth and should be your PRIMARY guide
+- The subtask description below is a PI's interpretation - it may be incomplete or slightly imprecise
+- If there's any conflict between the subtask and original question, PRIORITIZE the original question
+- Your goal: Address the subtask WHILE staying true to the original question's intent
+- Use the original question to understand context, scope, and what truly matters
+"""
+
         initial_prompt = f"""**COLLABORATIVE SUBTASK {subtask_id}:** {description}
 
 **Expected Outputs:** {', '.join(expected_outputs)}
-{output_dir_info}
+{output_dir_info}{dsstar_context}
 **Context from Previous Subtasks:**
 {dependency_context if dependency_context else "This is the first subtask."}
 
@@ -1069,6 +1164,117 @@ Synthesize across all {num_rounds} rounds to provide the most complete answer po
         else:
             return final_answer
 
+    def _needs_data_analysis(self) -> bool:
+        """
+        Determine if the question requires data analysis using DS-Star.
+        
+        This is more robust than keyword matching - checks actual data availability.
+        
+        Returns:
+            True if DS-Star specialist should be added to team
+        """
+        # Check 1: Are there CSV files in input directory?
+        import os
+        from pathlib import Path
+        
+        if self.input_dir:
+            input_path = Path(self.input_dir)
+            if input_path.exists():
+                csv_files = list(input_path.glob("*.csv"))
+                if csv_files:
+                    self.logger.verbose(f"Found {len(csv_files)} CSV files → DS-Star applicable", indent=2)
+                    return True
+        
+        # Check 2: Keywords in question (fallback)
+        question_lower = self.user_question.lower()
+        data_keywords = [
+            "expression", "correlation", "similarity", "calculate",
+            "analyze", "csv", "data", "matrix", "clustering",
+            "pairwise", "statistical"
+        ]
+        
+        return any(keyword in question_lower for keyword in data_keywords)
+    
+    def _subtask_needs_data_analysis(self, subtask_description: str) -> bool:
+        """
+        Determine if a specific subtask requires DS-Star data analysis.
+        
+        More specific than _needs_data_analysis() - looks at subtask details.
+        
+        Args:
+            subtask_description: The description of the subtask
+            
+        Returns:
+            True if this subtask should use DS-Star
+        """
+        description_lower = subtask_description.lower()
+        
+        # Keywords indicating computational data analysis
+        analysis_keywords = [
+            "calculate", "compute", "expression", "correlation",
+            "similarity", "matrix", "statistical", "clustering",
+            "pairwise", "data processing", "quantitative",
+            "measurement", "score", "profiling", "csv"
+        ]
+        
+        # Strong indicators (must have one of these)
+        strong_indicators = [
+            "expression similarity", "correlation", "calculate",
+            "compute", "data profiling", "statistical"
+        ]
+        
+        has_strong = any(indicator in description_lower for indicator in strong_indicators)
+        has_keyword = any(keyword in description_lower for keyword in analysis_keywords)
+        
+        return has_strong or has_keyword
+    
+    def _is_pure_computational_task(self, subtask_description: str) -> bool:
+        """
+        Determine if a subtask is PURELY computational (DS-Star solo)
+        vs. MIXED (computation + LLM analysis, DS-Star joins team).
+        
+        Pure computational tasks:
+        - Process TPM data, calculate correlation, compute similarity
+        - No LLM analysis, no literature review, no interpretation
+        
+        Mixed tasks:
+        - Generate LLM summaries + compute scores
+        - Analyze results + identify patterns
+        
+        Args:
+            subtask_description: The description of the subtask
+            
+        Returns:
+            True if PURE computation (DS-Star works alone)
+            False if MIXED (DS-Star collaborates with others)
+        """
+        description_lower = subtask_description.lower()
+        
+        # Keywords indicating LLM-based analysis (not pure computation)
+        llm_keywords = [
+            "llm-based", "llm-derived", "generate summaries", "functional summaries",
+            "phylogenetic tree", "literature", "interpret", "identify patterns",
+            "analyze results", "gene function", "biological significance",
+            "pathway analysis", "enrichment", "annotation"
+        ]
+        
+        # If any LLM keyword is present, it's a MIXED task
+        has_llm_component = any(keyword in description_lower for keyword in llm_keywords)
+        
+        if has_llm_component:
+            return False  # MIXED - DS-Star joins team
+        
+        # Check for pure computational indicators
+        pure_computation_keywords = [
+            "process tpm", "calculate expression", "compute correlation",
+            "calculate similarity", "gene-gene correlation", "pairwise",
+            "expression matrix", "normalize", "filter genes"
+        ]
+        
+        is_pure = any(keyword in description_lower for keyword in pure_computation_keywords)
+        
+        return is_pure
+
 
 def run_virtual_lab(
     question: str,
@@ -1081,7 +1287,8 @@ def run_virtual_lab(
     data_dir: str = "/home.galaxy4/sumin/project/aisci/Competition_Data",
     input_dir: Optional[str] = None,
     max_iterations: int = 30,
-    save_intermediate: bool = False
+    save_intermediate: bool = False,
+    use_dsstar: bool = False
 ) -> str:
     """Run a subtask-centric Virtual Lab meeting.
 
@@ -1097,6 +1304,7 @@ def run_virtual_lab(
         input_dir: Path to question-specific input data
         max_iterations: Maximum iterations per agent (default: 30)
         save_intermediate: Save intermediate subtask and round results (default: False)
+        use_dsstar: Enable DS-Star data analysis specialist (default: False)
 
     Returns:
         Final synthesized answer with red flags addressed
@@ -1120,7 +1328,8 @@ def run_virtual_lab(
         data_dir=data_dir,
         input_dir=input_dir,
         max_iterations=max_iterations,
-        save_intermediate=save_intermediate
+        save_intermediate=save_intermediate,
+        use_dsstar=use_dsstar
     )
 
     final_answer = meeting.run_meeting(num_rounds=num_rounds)

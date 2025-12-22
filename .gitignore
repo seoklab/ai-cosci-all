@@ -1,17 +1,56 @@
+# Python
 .*~
 *.un~
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Environment
+*.pyc
+__pycache__/
 .env
 .env.*
 *.env
-*.pyc
-*.md
-*.csv
-*.pml
-*.pdb
-*.txt
-*.png
-__pycache__/
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.un~
+
+# Project specific
 check_credit.py
 NEXT_SESSION.md
-.paperqa_cache/
+
+# Runtime outputs (may contain API keys in config files)
 outputs/
+logs/
+runs/
+dsstar_runs/
+
+# Temporary files
+*.log
+*.tmp
+*~
+.*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data files (optional - uncomment if needed)
+# *.md
+# *.csv
+# *.pml
+# *.pdb
+# *.txt
+# *.png
+
+# PaperQA cache
+.paperqa_cache/
