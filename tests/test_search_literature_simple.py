@@ -71,8 +71,8 @@ test_cache_dir.mkdir(parents=True, exist_ok=True)
 print(f"Test cache directory: {test_cache_dir}")
 
 # Test question
-test_question = "What are the key molecular markers of T cell exhaustion?"
-
+test_question = "Are there research that connect inhibitor or antagonists; Nr4a2 Nurr1 Slc17a6 VGLUT2 Spry1 Spry2 with T cell exhaustion reversal?"
+# test_question = "inhibitors antagonists Nr4a2 Nurr1 Slc17a6 VGLUT2 Spry1 Spry2 reversal T cell exhaustion"
 print(f"\n[3] Running Literature Search")
 print("-" * 70)
 print(f"Question: {test_question}")

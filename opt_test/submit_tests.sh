@@ -21,7 +21,7 @@ echo ""
 # ============================================================================
 
 echo "Step 1: Generating configurations..."
-bash /tmp/generate_configs.sh configs/optimization_jobs.txt
+bash /data/galaxy4/user/j2ho/projects/ai-cosci-all/opt_test/generate_configs.sh configs/optimization_jobs.txt
 
 NUM_CONFIGS=$(wc -l < configs/optimization_jobs.txt)
 echo ""
@@ -42,7 +42,7 @@ echo ""
 # ============================================================================
 
 echo "Step 3: Copying SLURM script..."
-cp /tmp/slurm_optimize.sh scripts/slurm_optimize.sh
+cp /data/galaxy4/user/j2ho/projects/ai-cosci-all/opt_test/slurm_optimize.sh scripts/slurm_optimize.sh
 chmod +x scripts/slurm_optimize.sh
 echo "  ✓ Copied to: scripts/slurm_optimize.sh"
 echo ""
