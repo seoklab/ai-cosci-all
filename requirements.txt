@@ -9,6 +9,8 @@ ipykernel==6.26.0
 jupyter==1.0.0
 matplotlib==3.8.0
 langgraph
+paper-qa>=5.0.0
+
 
 # DS-Star dependencies (for ext-tools/DS-Star integration)
 pydantic>=2.12.0
