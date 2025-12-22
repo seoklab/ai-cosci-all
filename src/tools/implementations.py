@@ -1438,7 +1438,7 @@ def _simple_pubmed_search(question: str, max_results: int = 5) -> ToolResult:
 
 def search_literature(
     question: str,
-    mode: str = "auto",
+    mode: str = "local",
     paper_dir: Optional[str] = None,
     max_sources: int = 10,
     cache_base_dir: Optional[str] = None,
@@ -3366,7 +3366,7 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                         "properties": {
                             "question": {
                                 "type": "string",
-                                "description": "Research query for literature search. IMPORTANT: Use FULL SENTENCE questions. Examples: BAD: 'AlphaFold protein structure prediction', 'EGFR inhibitor resistance mechanisms', 'RoseTTAFold deep learning'. GOOD: 'What are the seminal papers for AlphaFold?', 'How does EGFR resistance work?'. Remove meta-language like 'papers about', 'research on', 'key studies'. Focus on core scientific terms and protein/gene names.",
+                                "description": "Provide a concise research query (one short sentence or phrase) containing only the key concepts or keywords needed for the search. Avoid verbose wording or extra qualifiers. Examples: 'What is AlphaFold?', 'EGFR inhibitor resistance'.",
                             },
                             "mode": {
                                 "type": "string",
