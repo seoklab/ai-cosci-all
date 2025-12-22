@@ -1,0 +1,4 @@
+subtask-centric,2,3,15,google/gemini-3-flash-preview,r2_t3_i15_mgoogle_gemini-3-flash-preview
+subtask-centric,2,3,15,anthropic/claude-sonnet-4,r2_t3_i15_manthropic_claude-sonnet-4
+subtask-centric,2,3,30,google/gemini-3-flash-preview,r2_t3_i30_mgoogle_gemini-3-flash-preview
+subtask-centric,2,3,30,anthropic/claude-sonnet-4,r2_t3_i30_manthropic_claude-sonnet-4

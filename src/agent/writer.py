@@ -14,6 +14,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from dataclasses import dataclass
 import re
 import time
+from pathlib import Path
 
 from src.agent.openrouter_client import OpenRouterClient
 from src.agent.anthropic_client import AnthropicClient
@@ -317,7 +318,12 @@ Answer:"""
 class PaperSolver:
     """Main class for generating academic papers with global sentence-level citations."""
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "google/gemini-3-flash-preview", provider: str = "openrouter"):
+    def __init__(self, 
+                 api_key: Optional[str] = None, 
+                 model: str = "google/gemini-3-flash-preview", 
+                 provider: str = "openrouter",
+                 citation: Optional[Path] = None,
+                 use_global_citations: bool = True):
         """Initialize the paper solver with specified model and provider."""
         if provider == "anthropic":
             self.client = AnthropicClient(api_key=api_key, model=model)
@@ -330,6 +336,9 @@ class PaperSolver:
         }
         
         self.citation_processor = SentenceCitationProcessor(self.client)
+
+        self.citation_file = citation
+        self.use_global_citations = use_global_citations
     
     def generate_paper(
         self, 
@@ -344,10 +353,151 @@ class PaperSolver:
         
         print(f"🔬 Generating {target_word_count}-word academic paper...")
         
-        return self._generate_with_global_citations(
+        if self.use_global_citations:
+            return self._generate_with_global_citations(
+                research_question, scientist_findings, target_word_count, 
+                max_retries, retry_delay, temperature
+            )
+        else:
+            draft = self._generate_draft(
             research_question, scientist_findings, target_word_count, 
             max_retries, retry_delay, temperature
-        )
+            )
+            references = self._generate_references_section(self.citation_file)
+
+            final_paper = f"{draft}\n\n{references}"
+            return final_paper
+        
+    def _generate_references_section(self, citation_file: Optional[Path]) -> str:
+        """Generate References section from CSV file with journal information."""
+        if not citation_file or not citation_file.exists():
+            return "\n## References\n\nNo references file provided.\n"
+        
+        try:
+            import pandas as pd
+        except ImportError:
+            print("Warning: pandas not available. Cannot process CSV file.")
+            return "\n## References\n\nError: pandas required to process citations CSV file.\n"
+        
+        try:
+            # Read CSV file
+            df = pd.read_csv(citation_file)
+            
+            if df.empty:
+                return "\n## References\n\nNo citations found in file.\n"
+            
+            references_content = "## References\n\n"
+            
+            # Process each row to create formatted references
+            for idx, row in df.iterrows():
+                ref_number = idx + 1
+                
+                # Extract fields with fallback handling
+                author = self._clean_field(row.get('author', ''))
+                title = self._clean_field(row.get('title', ''))
+                journal = self._clean_field(row.get('journal', ''))
+                volume = self._clean_field(row.get('volume', ''))
+                page = self._clean_field(row.get('page', ''))
+                year = self._clean_field(row.get('year', ''))
+                doi = self._clean_field(row.get('doi', ''))
+                pmid = self._clean_field(row.get('pmid', ''))
+                arxiv_id = self._clean_field(row.get('arxiv_id', ''))
+                
+                # Build reference in academic format
+                ref_parts = []
+                
+                # Authors
+                if author:
+                    # Handle multiple authors - format properly
+                    if ',' in author and ' and ' not in author.lower():
+                        # Assume comma-separated authors
+                        authors = [a.strip() for a in author.split(',')]
+                        if len(authors) > 3:
+                            formatted_author = f"{authors[0]} et al."
+                        else:
+                            formatted_author = ', '.join(authors[:-1]) + f" and {authors[-1]}" if len(authors) > 1 else authors[0]
+                    else:
+                        formatted_author = author
+                    ref_parts.append(formatted_author)
+                
+                # Title
+                if title:
+                    # Ensure title ends with period if it doesn't already
+                    title_formatted = title if title.endswith('.') else f"{title}."
+                    ref_parts.append(title_formatted)
+                
+                # Journal, Volume, Pages, Year
+                journal_info = []
+                if journal:
+                    journal_info.append(journal)
+                
+                # Add volume and pages if available
+                if volume:
+                    if page:
+                        journal_info.append(f"{volume}, {page}")
+                    else:
+                        journal_info.append(f"{volume}")
+                elif page:
+                    journal_info.append(page)
+                
+                # Add year
+                if year:
+                    journal_info.append(f"({year})")
+                
+                if journal_info:
+                    ref_parts.append(' '.join(journal_info))
+                
+                # Build complete reference string
+                if ref_parts:
+                    reference_text = ' '.join(ref_parts)
+                    if not reference_text.endswith('.'):
+                        reference_text += '.'
+                else:
+                    reference_text = "Reference information incomplete."
+                
+                # Add DOI if available
+                if doi:
+                    if doi.startswith('http'):
+                        reference_text += f" {doi}"
+                    else:
+                        reference_text += f" DOI: {doi}"
+                
+                # Add PMID if available and no DOI
+                elif pmid:
+                    reference_text += f" PMID: {pmid}"
+                
+                # Add arXiv ID if available and no DOI/PMID
+                elif arxiv_id:
+                    reference_text += f" arXiv: {arxiv_id}"
+                
+                # Add formatted reference to content
+                references_content += f"[{ref_number}] {reference_text}\n\n"
+            
+            print(f"   Generated References section with {len(df)} citations")
+            return references_content
+            
+        except Exception as e:
+            print(f"Error processing citation file {citation_file}: {e}")
+            return f"\n## References\n\nError processing citations: {str(e)}\n"
+    
+    def _clean_field(self, field_value) -> str:
+        """Clean and validate a field value from CSV."""
+        try:
+            import pandas as pd
+            if pd.isna(field_value):
+                return ""
+        except (ImportError, TypeError):
+            # Handle case where pandas not available or field_value is not pandas-compatible
+            if field_value is None:
+                return ""
+        
+        field_str = str(field_value).strip()
+        
+        # Remove common placeholder values
+        if field_str.lower() in ['n/a', 'na', 'null', 'none', '']:
+            return ""
+        
+        return field_str
 
     def _generate_with_global_citations(
         self, 

@@ -220,8 +220,14 @@ Examples:
     citation_group.add_argument(
         "--global-citations",
         action="store_true",
-        default=True,
-        help="Use global sentence-level citations (default: True)"
+        default=False,
+        help="Use global sentence-level citations (default: False)"
+    )
+
+    parser.add_argument(
+        "--citation",
+        type=Path,
+        help="Path to the citation file (CSV) to add to the References section"
     )
     
     # Model arguments
@@ -284,7 +290,9 @@ Examples:
         solver = PaperSolver(
             api_key=api_key,
             model=args.model,
-            provider=args.provider
+            provider=args.provider,
+            citation=args.citation,
+            use_global_citations=args.global_citations
         )
         print("✅ Paper solver initialized successfully")
         
